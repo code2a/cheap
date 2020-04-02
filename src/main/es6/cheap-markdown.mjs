@@ -22,6 +22,10 @@ class CheapNode {
   //---------------------------------------------------
   hasChildren() {return !_.isEmpty(this.children)}
   //---------------------------------------------------
+  emptyChildren() {
+    this.children = []
+  }
+  //---------------------------------------------------
   childrenNodes() {
     return this.children
   }
@@ -40,9 +44,15 @@ class CheapNode {
 class CheapText extends CheapNode {
   //---------------------------------------------------
   constructor(text="", endLine=false, parentNode=null){
-    super("Text", parentNode)t
+    super("Text", parentNode)
     this.text = text
     this.endLine = endLine
+  }
+  //---------------------------------------------------
+  getMarkdown() {
+    return this.endLine 
+      ? this.text + "\n"
+      : this.text
   }
   //---------------------------------------------------
   appendChild(){
@@ -62,15 +72,28 @@ class CheapElement extends CheapNode {
     this.display = _.toLower(display)
     this.style = style || {}
     this.attrs = attrs || {}
-    this.markdowns = []
   }
   //---------------------------------------------------
   getAttr(name) {
     return this.attrs[name]
   }
   //---------------------------------------------------
+  setAttr(name, value=true) {
+    if(_.isString(name)) {
+      this.attrs[name] = value
+    }
+    // attr set
+    else if(_.isPlainObject(name)) {
+      _.assign(this.attrs, name)
+    }
+  }
+  //---------------------------------------------------
+  isAttr(name, value) {
+    return this.attrs[name] == value
+  }
+  //---------------------------------------------------
   empty() {
-    this.markdowns = []
+    super.emptyChildren()
   }
   //---------------------------------------------------
   isTag(tagName) {
@@ -82,7 +105,11 @@ class CheapElement extends CheapNode {
   }
   //---------------------------------------------------
   getMarkdown() {
-    return this.markdowns.join("\n");
+    let mds = []
+    for(let nd of this.children){
+      mds.push(nd.getMarkdown())
+    }
+    return mds.join("")
   }
   //---------------------------------------------------
   setInnerMarkdown(markdown) {
@@ -91,7 +118,7 @@ class CheapElement extends CheapNode {
   }
   //---------------------------------------------------
   appendMarkdown(markdown) {
-    this.markdowns.push(markdown)
+    // TODO ...
   }
   //---------------------------------------------------
 }
@@ -102,6 +129,18 @@ class CheapTableElement extends CheapElement {
   }
   appendMarkdown(markdown) {
     throw "TABLE can't appendMarkdown!!!"
+  }
+}
+///////////////////////////////////////////////////////
+class CheapTableHeadElement extends CheapElement {
+  constructor(parentNode=null){
+    super("THEAD", "table-head", {}, parentNode)
+  }
+}
+///////////////////////////////////////////////////////
+class CheapTableBodyElement extends CheapElement {
+  constructor(parentNode=null){
+    super("TBODY", "table-body", {}, parentNode)
   }
 }
 ///////////////////////////////////////////////////////
@@ -120,10 +159,52 @@ class CheapTableRowElement extends CheapElement {
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
-class CheapTableElement extends CheapElement {
-  constructor(parentNode=null) {
-    super("TABLE", "table", {}, parentNode)
+class CheapTableCellElement extends CheapElement {
+  constructor(parentNode=null){
+    super("TD", "table-cell", {}, parentNode)
   }
+}
+///////////////////////////////////////////////////////
+class CheapListElement extends CheapListElement {
+  constructor(tagName, parentNode=null){
+    super(tagName, "block", {}, parentNode)
+  }
+}
+///////////////////////////////////////////////////////
+class CheapOrderedListElement extends CheapListElement {
+  constructor(parentNode=null){
+    super("OL", parentNode)
+  }
+}
+///////////////////////////////////////////////////////
+class CheapUnorderedListElement extends CheapListElement {
+  constructor(parentNode=null){
+    super("UL", parentNode)
+  }
+}
+///////////////////////////////////////////////////////
+class CheapListItemElement extends CheapElement {
+  constructor(parentNode=null){
+    super("LI", "block", {},  parentNode)
+  }
+}
+///////////////////////////////////////////////////////
+class CheapHrElement extends CheapElement {
+  constructor(parentNode=null){
+    super("HR", "block", {},  parentNode)
+  }
+}
+///////////////////////////////////////////////////////
+class CheapCodeElement extends CheapElement {
+  //---------------------------------------------------
+  constructor(parentNode=null){
+    super("CODE", "block", {},  parentNode)
+  }
+  //---------------------------------------------------
+  isGFMCode() {
+    return this.isAttr("mode", "GFM")
+  }
+  //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
 class CheapDocument {
@@ -180,8 +261,8 @@ class CheapBlock {
     return this.$top && this.$top.tagName == tagName
   }
   //---------------------------------------------------
-  isTopAttr(name, val) {
-    return this.getTopAttr(name) == val
+  isTopAs(elementClass) {
+    return this.$top && elementClass && (this.$top instanceof elementClass)
   }
   //---------------------------------------------------
   /***
@@ -215,9 +296,20 @@ class CheapBlock {
     }
     //.................................................
     // >>> Code
-    if(this.isTopTag("CODE")) {
+    if(this.isTopAs(CheapCodeElement)) {
+      // GFM code
+      if(this.$top.isGFMCode()) {
+        // Closed
+        if("```" == trimed) {
+          return {closed:true}
+        }
+        // Join Code
+        else {
+          this.$top.appendText(line, true)
+        }
+      }
       // Indent code
-      if(this.isTopAttr("byIndent", true)) {
+      else {
         // Still indent code
         if(cI > 0) {
           let codeLine = line.substring(cI)
@@ -226,17 +318,6 @@ class CheapBlock {
         // Quit indent
         else {
           return {repush:true, closed:true}
-        }
-      }
-      // GFM code
-      else {
-        // Closed
-        if("```" == trimed) {
-          return {closed:true}
-        }
-        // Join Code
-        else {
-          this.$top.appendText(line, true)
         }
       }
     }
@@ -326,9 +407,8 @@ class CheapBlock {
     //.................................................
     // Indent Code
     if(cI > 0) {
-      this.$top = new CheapElement("CODE", "block", {
-        attrs: {byIndent:true}
-      })
+      this.$top = new CheapCodeElement()
+      this.$top.setAttr({mode: "GFM"})
       let codeLine = line.substring(cI)
       this.$top.appendText(codeLine, true)
       return
@@ -337,15 +417,16 @@ class CheapBlock {
     // GFM Code
     if(trimed.startsWith("```")) {
       let type = _.trim(trimed.substring(3)) || null
-      this.$top = new CheapElement("CODE", "block", {
-        attrs: {type}
+      this.$top = new CheapCodeElement()
+      this.$top.setAttr({
+        mode: "GFM", type
       })
       return
     }
     //.................................................
     // HR
     if(/^(-{3,}|={3,})$/.test(trimed)) {
-      this.$top = new CheapElement("HR", "block")
+      this.$top = new CheapHrElement()
       return {closed:true}
     }
     //.................................................
@@ -354,7 +435,7 @@ class CheapBlock {
       if(!this.isEmpty() && !this.isTopTag("BLOCKQUOTE")){
         return {repush:true, closed:true}
       }
-      this.$top = new CheapElement("BLOCKQUOTE", "block")
+      this.$top = new CheapBlockQuoteElement()
       let text = _.trim(trimed.substring(1))
       this.$top.appendMarkdown(text)
       return
@@ -366,16 +447,25 @@ class CheapBlock {
       if(!this.isEmpty()){
         return {closed:true, repush:true}
       }
+      // Create top OL/UL
       let start = m[3] * 1
-      let tagName = isNaN(start) ? "UL" : "OL"
-      let attrs = isNaN(start) ? {} : {start}
       this.$top = new CheapElement(tagName, "block", {attrs})
-      this.$li = new CheapElement("LI", "block", {
-        attrs: {
-          indent,
-          depth : parseInt(indent % this.listIndent)
-        }
-      }, this.$top)
+      // UL
+      if(isNaN(start)) {
+        this.$top = new CheapUnorderedListElement()
+      }
+      // OL 
+      else {
+        this.$top = new CheapOrderedListElement()
+        this.$top.setAttr({start})
+      }
+      // Append the first list item
+      this.$li = new CheapListItemElement(this.$top)
+      this.$li.setAttr({
+        indent,
+        depth : parseInt(indent % this.listIndent)
+      })
+      // append list item content
       let text = _.trim(trimed.substring(2))
       this.$li.appendMarkdown(text)
     }
@@ -384,11 +474,11 @@ class CheapBlock {
     if(/^([ |:-]{6,})$/.test(trimed) && 1==this.lineCount && !this.isEmpty()) {
       let header = this.$top.getMarkdown()
       this.$top = new CheapTableElement();
-      let $thead = new CheapElement("THEAD", "table-head", {}, this.$top)
+      let $thead = new CheapTableHeadElement(this.$top)
       let $h_row = new CheapTableRowElement($thead)
       $h_row.appendMarkdown(header)
 
-      this.$tbody = new CheapElement("TBODY", "table-body", {}, this.$top)
+      this.$tbody = new CheapTableBodyElement(this.$top)
     }
     //.................................................
     // Normal paragraph
