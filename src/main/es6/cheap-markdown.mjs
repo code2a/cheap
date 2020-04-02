@@ -52,6 +52,32 @@ class CheapNode {
     this.__children().unshift(node)
   }
   //---------------------------------------------------
+  treeWalk(depth=0, iteratee=_.identity){
+    if(this.hasChildren()){
+      for(let child of this.children) {
+        child.treeWalk(depth+1, iteratee)
+      }
+    }
+  }
+  //---------------------------------------------------
+  toString() {
+    let ss = []
+    this.treeWalk(0, ({depth, name, value})=>{
+      let prefix = depth>0
+        ? "|-- "
+        : ""
+      let display = value.display
+        ? `{${value.display}}`
+        : ""
+      let attrs = value.attrs && !_.isEmpty(value.attrs)
+        ? JSON.stringify(value.attrs)
+        : ""
+      let text = _.isString(value) ? value : ""
+      ss.push(`${_.repeat("|   ", depth-1)}${prefix}${name} ${display} ${attrs}${text}`)
+    })
+    return ss.join("\n")
+  }
+  //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
 class CheapTextNode extends CheapNode {
@@ -71,6 +97,14 @@ class CheapTextNode extends CheapNode {
   //---------------------------------------------------
   appendChild(){
     throw "Text canot append child"
+  }
+  //---------------------------------------------------
+  treeWalk(depth=0, iteratee=_.identity) {
+    iteratee({
+      depth,
+      name  : "!TEXT",
+      value : this.text
+    })
   }
   //---------------------------------------------------
 }
@@ -110,6 +144,15 @@ class CheapElement extends CheapNode {
     super.emptyChildren()
   }
   //---------------------------------------------------
+  appendText(text) {
+    new CheapTextNode(text, this)
+  }
+  //---------------------------------------------------
+  setText(text) {
+    this.empty()
+    this.appendText(text)
+  }
+  //---------------------------------------------------
   isTag(tagName) {
     return this.tagName == tagName
   }
@@ -135,6 +178,19 @@ class CheapElement extends CheapNode {
     this.appendMarkdown(markdown)
   }
   //---------------------------------------------------
+  treeWalk(depth=0, iteratee=_.identity) {
+    iteratee({
+      depth,
+      name  : this.tagName,
+      value : {
+        display: this.display,
+        attrs  : this.attrs,
+        style  : this.style
+      }
+    })
+    super.treeWalk(depth, iteratee)
+  }
+  //---------------------------------------------------
   appendMarkdown(markdown) {
     //......................................
     // Define the regex
@@ -144,9 +200,8 @@ class CheapElement extends CheapNode {
         + '|(~~([^~]+)~~)'
         + '|(`([^`]+)`)'
         + '|(!\\[([^\\]]*)\\]\\(([^\\)]+)\\))'
-        + '|(\\[('
-        + '(!\\[([^\\]]*)\\]\\(([^\\)]+)\\))|([^\\]]*)'
-        + ')\\]\\(([^\\)]*)\\))'
+        + '|(\\[([^\\]]*)\\]\\(([^\\)]+)\\))'
+        + '|(\\[([^\\]]*)\\]\\[([^\\]]+)\\])'
         + '|(https?:\\/\\/[^ ]+)';
     let REG = new RegExp(reg, "g");
     //......................................
@@ -155,19 +210,111 @@ class CheapElement extends CheapNode {
     let pos = 0;
     //......................................
     // In loop
-    while (m = REG.exec(str)) {
+    while (m = REG.exec(markdown)) {
       //console.log(m)
       //....................................
-      // !Text
+      // !Head-Text
       if (pos < m.index) {
-        var text = str.substring(pos, m.index);
+        var text = markdown.substring(pos, m.index);
         new CheapTextNode(text, this)
       }
       // EM: *xxx*
-      else {
-
+      if (m[1]) {
+        new CheapEmphasisElement(this).setText(m[2])
       }
+      // B: **xxx**
+      else if (m[3]) {
+        new CheapBoldElement(this).setText(m[4])
+      }
+      // U: __xxx__
+      else if (m[5]) {
+        new CheapUnderlineElement(this).setText(m[6])
+      }
+      // DEL: ~~xxx~~
+      else if (m[7]) {
+        new CheapDeletedTextElement(this).setText(m[8])
+      }
+      // CODE: `xxx`
+      else if (m[9]) {
+        let s2 = m[10]
+        new CheapCodeElement(this).setText(s2)
+      }
+      // IMG or Video: ![](xxxx)
+      else if(m[11]) {
+        let alt = _.trim(m[12])
+        let src = _.trim(m[13])
+        let attrs = {src, alt}
+
+        // Customized width/height
+        // [100-50]
+        let m2 = /^([0-9.]+(px|%|rem|em)?)-?([0-9.]+(px|%|rem|em)?)(:(.*))?$/.exec(alt);
+        if(m2){
+          attrs.width  = m2[1]
+          attrs.height = m2[3]
+          attrs.alt    = m2[6]
+        }
+
+        // For vidio
+        if(/[.](mp4|avi|mov)$/.test(src)){
+          new CheapVideoElement(this).setAttr(attrs)
+        }
+        // For Image
+        else {
+          new CheapImageElement(this).setAttr(attrs)
+        }
+      }
+      // A: [](xxxx)
+      else if (m[14]) {
+        let href = m[16]
+        let text = m[15]
+        let attrs = {href}
+
+        // New Tab
+        if(text && text.startsWith("+")){
+          attrs.target = "_blank"
+          text = _.trim(text.substring(1))
+        }
+
+        // Gen tag
+        let $an = new CheapAnchorElement(this)
+        $an.setAttr(attrs)
+        $an.appendText(text || href)
+      }
+      // A: [][refer]
+      else if(m[17]) {
+        let refer = m[19]
+        let text = m[18]
+        let attrs = {refer}
+
+        // New Tab
+        if(text && text.startsWith("+")){
+          attrs.target = "_blank"
+          text = _.trim(text.substring(1))
+        }
+
+        // Gen tag
+        let $an = new CheapAnchorElement(this)
+        $an.setAttr(attrs)
+        $an.appendText(text || refer)
+      }
+      // A: http://xxxx
+      else if(m[20]) {
+        let href = m[20]
+        let $an = new CheapAnchorElement(this)
+        $an.setAttr({href, primaryLink:true})
+        $an.appendText(href)
+      }
+
+      // The move the cursor
+      pos = m.index + m[0].length
+    } // ~ while (m = REG.exec(str)) {
+    //......................................
+    // !Tail-Text
+    if(pos < markdown.length) {
+      let text = markdown.substring(pos)
+      new CheapTextNode(text, this)
     }
+
     //......................................
   } // ~appendMarkdown(markdown)
   //---------------------------------------------------
@@ -213,6 +360,11 @@ class CheapImageElement extends CheapElement {
     super("IMG", "inline", {}, parentNode)
   }
 }
+class CheapVideoElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("VIDEO", "inline", {}, parentNode)
+  }
+}
 ///////////////////////////////////////////////////////
 class CheapTableElement extends CheapElement {
   constructor(parentNode=null) {
@@ -242,15 +394,19 @@ class CheapTableRowElement extends CheapElement {
   }
   //---------------------------------------------------
   appendMarkdown(markdown) {
-    this.markdowns = [markdown]
-
     // Split Cells
-    //...
+    let ss = _.without(markdown.split("|"), "")
+
+    // Gen cells
+    for(let s of ss) {
+      let $cell = new CheapTableDataCellElement(this)
+      $cell.appendMarkdown(s)
+    }
   }
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
-class CheapTableCellElement extends CheapElement {
+class CheapTableDataCellElement extends CheapElement {
   constructor(parentNode=null){
     super("TD", "table-cell", {}, parentNode)
   }
@@ -331,6 +487,14 @@ class CheapBlockQuoteElement extends CheapElement {
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
+class CheapSectionHeadingElement extends CheapElement {
+  //---------------------------------------------------
+  constructor(level=1, parentNode=null){
+    super(`H${level}`, "block", {level},  parentNode)
+  }
+  //---------------------------------------------------
+}
+///////////////////////////////////////////////////////
 class CheapParagraphElement extends CheapElement {
   //---------------------------------------------------
   constructor(parentNode=null){
@@ -339,10 +503,18 @@ class CheapParagraphElement extends CheapElement {
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
+class CheapBodyElement extends CheapElement {
+  //---------------------------------------------------
+  constructor(parentNode=null){
+    super("BODY", "block", {},  parentNode)
+  }
+  //---------------------------------------------------
+}
+///////////////////////////////////////////////////////
 class CheapDocument {
   //---------------------------------------------------
   constructor(){
-    this.$root = new CheapElement(null, "markdown")
+    this.$body = new CheapBodyElement()
     this.$meta = {}
   }
   //---------------------------------------------------
@@ -375,7 +547,7 @@ class CheapBlock {
   }
   //---------------------------------------------------
   isEmpty() {
-    return this.$top ? true : false
+    return this.$top ? false : true
   }
   //---------------------------------------------------
   reset() {
@@ -404,6 +576,8 @@ class CheapBlock {
     let trimed = _.trim(line)
     this.lineCount ++
     //.................................................
+    let m;  // Matcher result
+    //.................................................
     // Count indent
     let indent = 0
     let cI = -1
@@ -427,7 +601,7 @@ class CheapBlock {
       }
     }
     //.................................................
-    // >>> <pre>
+    // >>> Pre
     if(this.isTopAs(CheapPreformattedTextElement)) {
       // GFM code
       if(this.$top.isGFMCode()) {
@@ -486,7 +660,7 @@ class CheapBlock {
       //-----------------------------------
       // eval current line
       let start = undefined;
-      let m = /^(([*-])|(\d)\.) +(.+)$/.exec(trimed)
+      m = /^(([*-])|(\d)\.) +(.+)$/.exec(trimed)
       if(m) {
         if(!this.isEmpty()){
           return {closed:true, repush:true}
@@ -527,10 +701,11 @@ class CheapBlock {
       }
       //-----------------------------------
     }
-    //.................................................
+    //+++++++++++++++++++++++++++++++++++++++++++++++++
     // empty block: return true to end the block
+    //+++++++++++++++++++++++++++++++++++++++++++++++++
     if(!trimed) {
-      return {closed: this.isEmpty()}
+      return {closed: !this.isEmpty()}
     }
     //.................................................
     // >>> TABLE
@@ -544,7 +719,7 @@ class CheapBlock {
     m = /^(#{1,})[\t ]+(.*)$/.exec(trimed)
     if(m) {
       let n = m[1].length
-      this.$top = new CheapElement(`H${n}`, "block")
+      this.$top = new CheapSectionHeadingElement(n)
       this.$top.appendMarkdown(m[2])
       return {closed:true}
     }
@@ -593,7 +768,6 @@ class CheapBlock {
       }
       // Create top OL/UL
       let start = m[3] * 1
-      this.$top = new CheapElement(tagName, "block", {attrs})
       // UL
       if(isNaN(start)) {
         this.$top = new CheapUnorderedListElement()
@@ -648,33 +822,32 @@ function CheapParseMarkdown(markdown="") {
   // Find the header
   let inHeader = false
   while(lnIndex < lines.length) {
-    let line = lines[lnIndex]
+    let line = lines[lnIndex++]
     let trimed = _.trim(line)
     // Ignore blank line
     if(!trimed) {
-      lnIndex ++
       continue
     }
     // Found the head part
     if('---' == trimed) {
-      lnIndex ++
       inHeader = true
     }
+    // Always break
+    break
   }
   //.................................................
   // Scan header
   while(inHeader && lnIndex < lines.length) {
-    let line = lines[lnIndex]
+    let line = lines[lnIndex++]
     let trimed = _.trim(line)
     // Ignore blank line
     if(!trimed) {
-      lnIndex ++
       continue
     }
     // Quit header
     if('---' == trimed) {
-      lnIndex ++
       inHeader = false
+      break
     }
     // Join List
     if(trimed.startsWith("-")) {
@@ -696,8 +869,8 @@ function CheapParseMarkdown(markdown="") {
     let line = lines[lnIndex]
     let {repush, closed} = block.pushLine(line) || {}
     // Closed block
-    if(closed) {
-      MdDoc.$root.appendChild(block.$top)
+    if(closed && !block.isEmpty()) {
+      MdDoc.$body.appendChild(block.$top)
       block.reset()
     }
     // push again
@@ -706,12 +879,12 @@ function CheapParseMarkdown(markdown="") {
     }
   }
   //.................................................
+  return MdDoc
 }
 ///////////////////////////////////////////////////////
-///////////////////////////////////////////////////////
 export const Cheap = {
-  parse(markdown) {
-    console.log("cheap", markdown)
+  parseMarkdown(markdown) {
+    return CheapParseMarkdown(markdown)
   }
 }
 ///////////////////////////////////////////////////////
