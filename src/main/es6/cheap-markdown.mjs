@@ -20,10 +20,23 @@ class CheapNode {
     return this.children
   }
   //---------------------------------------------------
+  isElementNode() {return "Element" == this.nodeType}
+  isTextNode() {return "Text" == this.nodeType}
+  //---------------------------------------------------
   hasChildren() {return !_.isEmpty(this.children)}
   //---------------------------------------------------
   emptyChildren() {
     this.children = []
+  }
+  //---------------------------------------------------
+  getText() {
+    let ss = []
+    if(this.hasChildren()) {
+      for(let child of this.children) {
+        ss.push(child.getText())
+      }
+    }
+    return ss.join("")
   }
   //---------------------------------------------------
   childrenNodes() {
@@ -41,18 +54,19 @@ class CheapNode {
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
-class CheapText extends CheapNode {
+class CheapTextNode extends CheapNode {
   //---------------------------------------------------
-  constructor(text="", endLine=false, parentNode=null){
+  constructor(text="", parentNode=null){
     super("Text", parentNode)
     this.text = text
-    this.endLine = endLine
   }
   //---------------------------------------------------
   getMarkdown() {
-    return this.endLine 
-      ? this.text + "\n"
-      : this.text
+    return this.text
+  }
+  //---------------------------------------------------
+  getText() {
+    return this.text
   }
   //---------------------------------------------------
   appendChild(){
@@ -100,14 +114,18 @@ class CheapElement extends CheapNode {
     return this.tagName == tagName
   }
   //---------------------------------------------------
-  appendText(text, endLine=false) {
-    new CheapText(text, endLine, this)
-  }
-  //---------------------------------------------------
   getMarkdown() {
     let mds = []
     for(let nd of this.children){
       mds.push(nd.getMarkdown())
+      if(nd.isElementNode() 
+         && /^(block|table)$/.test(nd.display)) {
+        mds.push("\n\n")
+      }
+    }
+    // Remove the Endle "\n\n"
+    if(mds.length>0 && _.last(mds) == "\n\n") {
+      mds = _.slice(mds, 0, mds.length-1)
     }
     return mds.join("")
   }
@@ -118,9 +136,82 @@ class CheapElement extends CheapNode {
   }
   //---------------------------------------------------
   appendMarkdown(markdown) {
-    // TODO ...
-  }
+    //......................................
+    // Define the regex
+    let reg = '(\\*([^*]+)\\*)'
+        + '|(\\*\\*([^*]+)\\*\\*)'
+        + '|(__([^_]+)__)'
+        + '|(~~([^~]+)~~)'
+        + '|(`([^`]+)`)'
+        + '|(!\\[([^\\]]*)\\]\\(([^\\)]+)\\))'
+        + '|(\\[('
+        + '(!\\[([^\\]]*)\\]\\(([^\\)]+)\\))|([^\\]]*)'
+        + ')\\]\\(([^\\)]*)\\))'
+        + '|(https?:\\/\\/[^ ]+)';
+    let REG = new RegExp(reg, "g");
+    //......................................
+    // Prepare matching
+    let m;
+    let pos = 0;
+    //......................................
+    // In loop
+    while (m = REG.exec(str)) {
+      //console.log(m)
+      //....................................
+      // !Text
+      if (pos < m.index) {
+        var text = str.substring(pos, m.index);
+        new CheapTextNode(text, this)
+      }
+      // EM: *xxx*
+      else {
+
+      }
+    }
+    //......................................
+  } // ~appendMarkdown(markdown)
   //---------------------------------------------------
+}
+///////////////////////////////////////////////////////
+class CheapBoldElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("B", "inline", {}, parentNode)
+  }
+}
+class CheapItalicElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("EM", "inline", {}, parentNode)
+  }
+}
+class CheapEmphasisElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("EM", "inline", {}, parentNode)
+  }
+}
+class CheapUnderlineElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("U", "inline", {}, parentNode)
+  }
+}
+class CheapDeletedTextElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("U", "inline", {}, parentNode)
+  }
+}
+class CheapCodeElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("CODE", "inline", {}, parentNode)
+  }
+}
+class CheapAnchorElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("A", "inline", {}, parentNode)
+  }
+}
+class CheapImageElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("IMG", "inline", {}, parentNode)
+  }
 }
 ///////////////////////////////////////////////////////
 class CheapTableElement extends CheapElement {
@@ -165,7 +256,7 @@ class CheapTableCellElement extends CheapElement {
   }
 }
 ///////////////////////////////////////////////////////
-class CheapListElement extends CheapListElement {
+class CheapListElement extends CheapElement {
   constructor(tagName, parentNode=null){
     super(tagName, "block", {}, parentNode)
   }
@@ -195,14 +286,55 @@ class CheapHrElement extends CheapElement {
   }
 }
 ///////////////////////////////////////////////////////
-class CheapCodeElement extends CheapElement {
+class CheapPreformattedTextElement extends CheapElement {
   //---------------------------------------------------
   constructor(parentNode=null){
-    super("CODE", "block", {},  parentNode)
+    super("PRE", "block", {},  parentNode)
   }
   //---------------------------------------------------
   isGFMCode() {
     return this.isAttr("mode", "GFM")
+  }
+  //---------------------------------------------------
+  getCodeType(dft=null) {
+    return this.getAttr("type") || dft
+  }
+  //---------------------------------------------------
+  addCodeLine(codeLine) {
+    if(!_.isUndefined(codeLine) && !_.isNull(codeLine)) {
+      new CheapTextNode(codeLine, this)
+    }
+  }
+  //---------------------------------------------------
+  getMarkdown() {
+    let mds = []
+    let prefix = this.isGFMCode() ? "" : "    ";
+    if(this.isGFMCode()) {
+      mds.push("```" + this.getCodeType(""))
+    }
+    for(let nd of this.children){
+      mds.push(prefix + nd.getMarkdown())
+    }
+    if(this.isGFMCode()) {
+      mds.push("```")
+    }
+    return mds.join("\n")
+  }
+  //---------------------------------------------------
+}
+///////////////////////////////////////////////////////
+class CheapBlockQuoteElement extends CheapElement {
+  //---------------------------------------------------
+  constructor(parentNode=null){
+    super("BLOCKQUOTE", "block", {},  parentNode)
+  }
+  //---------------------------------------------------
+}
+///////////////////////////////////////////////////////
+class CheapParagraphElement extends CheapElement {
+  //---------------------------------------------------
+  constructor(parentNode=null){
+    super("P", "block", {},  parentNode)
   }
   //---------------------------------------------------
 }
@@ -295,8 +427,8 @@ class CheapBlock {
       }
     }
     //.................................................
-    // >>> Code
-    if(this.isTopAs(CheapCodeElement)) {
+    // >>> <pre>
+    if(this.isTopAs(CheapPreformattedTextElement)) {
       // GFM code
       if(this.$top.isGFMCode()) {
         // Closed
@@ -305,7 +437,7 @@ class CheapBlock {
         }
         // Join Code
         else {
-          this.$top.appendText(line, true)
+          this.$top.addCodeLine(line)
         }
       }
       // Indent code
@@ -313,7 +445,7 @@ class CheapBlock {
         // Still indent code
         if(cI > 0) {
           let codeLine = line.substring(cI)
-          this.$top.appendText(codeLine, true)
+          this.$top.addCodeLine(codeLine)
         }
         // Quit indent
         else {
@@ -327,14 +459,17 @@ class CheapBlock {
       let liDepth = this.$li.getAttr("depth")
       let myDepth = parseInt(indent/this.listIndent)
       let $list;
+      //-----------------------------------
       // Child
       if(myDepth > liDepth) {
         // Create  $list later
       }
+      //-----------------------------------
       // Sibling
       else if(myDepth == liDepth) {
         $list = this.$li.parentNode
       }
+      //-----------------------------------
       // find parent
       else {
         $list = this.$li.parentNode
@@ -348,40 +483,49 @@ class CheapBlock {
           return {closed:true, repush:true}
         }
       }
-
-      // current line -> List Item 
-      let tagName = "P"
-      let attrs = {}
-      m = /^(([*-])|(\d)\.) +(.+)$/.exec(trimed)
+      //-----------------------------------
+      // eval current line
+      let start = undefined;
+      let m = /^(([*-])|(\d)\.) +(.+)$/.exec(trimed)
       if(m) {
         if(!this.isEmpty()){
           return {closed:true, repush:true}
         }
-        let start = m[3] * 1
-        tagName = isNaN(start) ? "UL" : "OL"
-        attrs = isNaN(start) ? {} : {start}
+        start = m[3] * 1
       }
-
+      //-----------------------------------
       // Create new list if necessary
       if(!$list) {
-        $list = new CheapElement(tagName, "block", {attrs}, this.$li)
+        // <P>
+        if(_.isUndefined(start)) {
+          $list = new CheapParagraphElement(this.$li)
+        }
+        // <OL>
+        else if(isNaN(start)) {
+          $list = new CheapOrderedListElement(this.$li)
+        }
+        // <UL>
+        else {
+          $list = new CheapUnorderedListElement(this.$li)
+        }
       }
-
-      // Add current list item
-      if("P" != tagName) {
-        this.$li = new CheapElement("LI", "block", {
-          attrs: {
-            indent,
-            depth : parseInt(indent % this.listIndent)
-          }
-        }, $list)
+      //-----------------------------------
+      // <OL | UL> append children
+      if($list instanceof CheapListElement) {
+        this.$li = new CheapListItemElement($list)
+        this.$li.setAttr({
+          indent,
+          depth : parseInt(indent % this.listIndent)
+        })
         let text = _.trim(trimed.substring(2))
         this.$li.appendMarkdown(text)
       }
-      // current as normal paragraph
+      //-----------------------------------
+      // <P> append children
       else {
         $list.appendMarkdown(trimed)
       }
+      //-----------------------------------
     }
     //.................................................
     // empty block: return true to end the block
@@ -407,17 +551,17 @@ class CheapBlock {
     //.................................................
     // Indent Code
     if(cI > 0) {
-      this.$top = new CheapCodeElement()
+      this.$top = new CheapPreformattedTextElement()
       this.$top.setAttr({mode: "GFM"})
       let codeLine = line.substring(cI)
-      this.$top.appendText(codeLine, true)
+      this.$top.addCodeLine(codeLine)
       return
     }
     //.................................................
     // GFM Code
     if(trimed.startsWith("```")) {
       let type = _.trim(trimed.substring(3)) || null
-      this.$top = new CheapCodeElement()
+      this.$top = new CheapPreformattedTextElement()
       this.$top.setAttr({
         mode: "GFM", type
       })
@@ -483,7 +627,7 @@ class CheapBlock {
     //.................................................
     // Normal paragraph
     if(this.isEmpty()) {
-      this.$top = new CheapElement("P", "block")
+      this.$top = new CheapParagraphElement()
     }
     this.$top.appendMarkdown(line)
     //.................................................
