@@ -196,7 +196,7 @@ class CheapElement extends CheapNode {
     // Define the regex
     let reg = '(\\*([^*]+)\\*)'
         + '|(\\*\\*([^*]+)\\*\\*)'
-        + '|(__([^_]+)__)'
+        + '|(__?([^_]+)__?)'
         + '|(~~([^~]+)~~)'
         + '|(`([^`]+)`)'
         + '|(!\\[([^\\]]*)\\]\\(([^\\)]+)\\))'
@@ -212,6 +212,46 @@ class CheapElement extends CheapNode {
     // In loop
     while (m = REG.exec(markdown)) {
       //console.log(m)
+      // B/EM: __xxx__ or _xxx_
+      if (m[5]) {
+        let token = m[5]
+        // Must with space or boundary
+        if(m.index!=0){
+          let c = markdown.charAt(m.index-1)
+          if('\t'!=c && ' '!=c){
+            continue
+          }
+        }
+        let rbI = m.index + token.length
+        if(rbI!=markdown.length){
+          let c = markdown.charAt(rbI)
+          if('\t'!=c && ' '!=c){
+            continue
+          }
+        }
+        // B
+        if(token.startsWith("__") && token.endsWith("__")){
+          // !Head-Text
+          if (pos < m.index) {
+            var text = markdown.substring(pos, m.index);
+            new CheapTextNode(text, this)
+          }
+          new CheapBoldElement(this).setText(m[6])
+          pos = m.index + m[0].length
+        }
+        // EM
+        else if(token.startsWith("_") && token.endsWith("_")){
+          // !Head-Text
+          if (pos < m.index) {
+            var text = markdown.substring(pos, m.index);
+            new CheapTextNode(text, this)
+          }
+          new CheapEmphasisElement(this).setText(m[6])
+          pos = m.index + m[0].length
+        }
+        // Normal Text
+        continue
+      }
       //....................................
       // !Head-Text
       if (pos < m.index) {
@@ -225,10 +265,6 @@ class CheapElement extends CheapNode {
       // B: **xxx**
       else if (m[3]) {
         new CheapBoldElement(this).setText(m[4])
-      }
-      // U: __xxx__
-      else if (m[5]) {
-        new CheapUnderlineElement(this).setText(m[6])
       }
       // DEL: ~~xxx~~
       else if (m[7]) {
@@ -247,12 +283,16 @@ class CheapElement extends CheapNode {
 
         // Customized width/height
         // [100-50]
-        let m2 = /^([0-9.]+(px|%|rem|em)?)-?([0-9.]+(px|%|rem|em)?)(:(.*))?$/.exec(alt);
+        let m2 = /^([\d.]+(px|%|rem|em)?)(-([\d.]+(px|%|rem|em)?))?(:(.*))?$/.exec(alt);
         if(m2){
           attrs.width  = m2[1]
-          attrs.height = m2[3]
-          attrs.alt    = m2[6]
+          attrs.height = m2[4]
+          attrs.alt    = m2[7]
         }
+
+        // remove alt if blank
+        attrs = _.omitBy(attrs, v => !v)
+
 
         // For vidio
         if(/[.](mp4|avi|mov)$/.test(src)){
@@ -335,14 +375,9 @@ class CheapEmphasisElement extends CheapElement {
     super("EM", "inline", {}, parentNode)
   }
 }
-class CheapUnderlineElement extends CheapElement {
-  constructor(parentNode=null) {
-    super("U", "inline", {}, parentNode)
-  }
-}
 class CheapDeletedTextElement extends CheapElement {
   constructor(parentNode=null) {
-    super("U", "inline", {}, parentNode)
+    super("DEL", "inline", {}, parentNode)
   }
 }
 class CheapCodeElement extends CheapElement {
@@ -516,10 +551,15 @@ class CheapDocument {
   constructor(){
     this.$body = new CheapBodyElement()
     this.$meta = {}
+    this.$refs = {}
   }
   //---------------------------------------------------
   setMeta(name, value) {
     this.$meta[name] = value
+  }
+  //---------------------------------------------------
+  setRefer(name, value) {
+    this.$refs[name] = value
   }
   //---------------------------------------------------
   pushMetaValue(name, value) {
@@ -531,18 +571,37 @@ class CheapDocument {
     val.push(value)
   }
   //---------------------------------------------------
+  toString() {
+    let ss = []
+    if(!_.isEmpty(this.$meta)) {
+      ss.push(JSON.stringify(this.$meta, null, "   "))
+      ss.push(_.repeat('*', 60))
+    }
+
+    ss.push(this.$body.toString())
+
+    if(!_.isEmpty(this.$refs)) {
+      ss.push(_.repeat('*', 60))
+      ss.push(JSON.stringify(this.$refs, null, "   "))
+    }
+
+    return ss.join("\n")
+  }
+  //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
 class CheapBlock {
   //---------------------------------------------------
   constructor({
     indentAsCode = 4,   // how many indent as code block
-    tabIndent    = 4,     // TAB key indent value
-    listIndent   = 2
+    tabIndent = 4,      // TAB key indent value
+    ulIndent  = 2,
+    olIndent  = 3,
   }={}){
     this.indentAsCode = indentAsCode
     this.tabIndent  = tabIndent
-    this.listIndent = listIndent
+    this.ulIndent = ulIndent
+    this.olIndent = olIndent
     this.reset()
   }
   //---------------------------------------------------
@@ -552,9 +611,9 @@ class CheapBlock {
   //---------------------------------------------------
   reset() {
     this.$top = null
-    this.lineCount = 0
     this.$tbody = null
     this.$li = null
+    this.lastPushBlank = false
   }
   //---------------------------------------------------
   getTopAttr(name, dft=undefined) {
@@ -569,13 +628,25 @@ class CheapBlock {
     return this.$top && elementClass && (this.$top instanceof elementClass)
   }
   //---------------------------------------------------
+  pushLine(line="", trimed="") {
+    try {
+      return this.__do_push_line(line, trimed)
+    }
+    // Warn
+    catch(E) {
+      console.error("invalid line:", line)
+      throw E
+    }
+    // mark
+    finally {
+      this.lastPushBlank = trimed ? false : true
+    }
+  }
+  //---------------------------------------------------
   /***
    * @return {repush, closed}
    */
-  pushLine(line="") {
-    let trimed = _.trim(line)
-    this.lineCount ++
-    //.................................................
+  __do_push_line(line="", trimed="") {
     let m;  // Matcher result
     //.................................................
     // Count indent
@@ -626,16 +697,39 @@ class CheapBlock {
           return {repush:true, closed:true}
         }
       }
+      return
     }
     //.................................................
     // >>> List
     if(this.$li) {
+      // Close the list
+      if(!trimed) {
+        return {closed: this.lastPushBlank}
+      }
+      //-----------------------------------
+      // eval current line
+      let start = undefined;
+      m = /^(([*+-])|(\d)\.) +(.+)$/.exec(trimed)
+      if(m) {
+        start = m[3] * 1
+      }
+      //-----------------------------------
+      let listIndent = !isNaN(start) ? this.olIndent : this.ulIndent
+      //-----------------------------------
+      // Prepare to join
       let liDepth = this.$li.getAttr("depth")
-      let myDepth = parseInt(indent/this.listIndent)
+      let myDepth = parseInt(indent / listIndent)
       let $list;
       //-----------------------------------
+      // Normal paragraph
+      if(_.isUndefined(start)) {
+        if(myDepth == 0 && this.lastPushBlank) {
+          return {closed:true, repush:true}
+        }
+      }
+      //-----------------------------------
       // Child
-      if(myDepth > liDepth) {
+      else if(myDepth > liDepth) {
         // Create  $list later
       }
       //-----------------------------------
@@ -658,29 +752,26 @@ class CheapBlock {
         }
       }
       //-----------------------------------
-      // eval current line
-      let start = undefined;
-      m = /^(([*-])|(\d)\.) +(.+)$/.exec(trimed)
-      if(m) {
-        if(!this.isEmpty()){
-          return {closed:true, repush:true}
-        }
-        start = m[3] * 1
-      }
-      //-----------------------------------
       // Create new list if necessary
       if(!$list) {
         // <P>
         if(_.isUndefined(start)) {
-          $list = new CheapParagraphElement(this.$li)
-        }
-        // <OL>
-        else if(isNaN(start)) {
-          $list = new CheapOrderedListElement(this.$li)
+          if(this.lastPushBlank) {
+            $list = new CheapParagraphElement(this.$li)
+          }
+          // Just append to current li
+          else {
+            $list = this.$li
+          }
         }
         // <UL>
-        else {
+        else if(isNaN(start)) {
           $list = new CheapUnorderedListElement(this.$li)
+        }
+        // <OL>
+        else {
+          $list = new CheapOrderedListElement(this.$li)
+          $list.setAttr({start})
         }
       }
       //-----------------------------------
@@ -689,7 +780,7 @@ class CheapBlock {
         this.$li = new CheapListItemElement($list)
         this.$li.setAttr({
           indent,
-          depth : parseInt(indent % this.listIndent)
+          depth : parseInt(indent / listIndent)
         })
         let text = _.trim(trimed.substring(2))
         this.$li.appendMarkdown(text)
@@ -700,6 +791,7 @@ class CheapBlock {
         $list.appendMarkdown(trimed)
       }
       //-----------------------------------
+      return
     }
     //+++++++++++++++++++++++++++++++++++++++++++++++++
     // empty block: return true to end the block
@@ -727,7 +819,7 @@ class CheapBlock {
     // Indent Code
     if(cI > 0) {
       this.$top = new CheapPreformattedTextElement()
-      this.$top.setAttr({mode: "GFM"})
+      this.$top.setAttr({mode: "MARKDOWN"})
       let codeLine = line.substring(cI)
       this.$top.addCodeLine(codeLine)
       return
@@ -761,13 +853,15 @@ class CheapBlock {
     }
     //.................................................
     // UL / OL
-    m = /^(([*-])|(\d)\.) +(.+)$/.exec(trimed)
+    m = /^(([*+-])|(\d)\.) +(.+)$/.exec(trimed)
     if(m) {
       if(!this.isEmpty()){
         return {closed:true, repush:true}
       }
       // Create top OL/UL
       let start = m[3] * 1
+      // Count the indent
+      let listIndent = !isNaN(start) ? this.olIndent : this.ulIndent
       // UL
       if(isNaN(start)) {
         this.$top = new CheapUnorderedListElement()
@@ -781,15 +875,16 @@ class CheapBlock {
       this.$li = new CheapListItemElement(this.$top)
       this.$li.setAttr({
         indent,
-        depth : parseInt(indent % this.listIndent)
+        depth : parseInt(indent / listIndent)
       })
       // append list item content
       let text = _.trim(trimed.substring(2))
       this.$li.appendMarkdown(text)
+      return
     }
     //.................................................
     // TABLE
-    if(/^([ |:-]{6,})$/.test(trimed) && 1==this.lineCount && !this.isEmpty()) {
+    if(/^([ |:-]{6,})$/.test(trimed) && !this.isEmpty()) {
       let header = this.$top.getMarkdown()
       this.$top = new CheapTableElement();
       let $thead = new CheapTableHeadElement(this.$top)
@@ -797,6 +892,7 @@ class CheapBlock {
       $h_row.appendMarkdown(header)
 
       this.$tbody = new CheapTableBodyElement(this.$top)
+      return
     }
     //.................................................
     // Normal paragraph
@@ -832,6 +928,10 @@ function CheapParseMarkdown(markdown="") {
     if('---' == trimed) {
       inHeader = true
     }
+    // Normal line
+    else {
+      lnIndex --
+    }
     // Always break
     break
   }
@@ -858,8 +958,8 @@ function CheapParseMarkdown(markdown="") {
     }
     // Set meta value
     else {
-      let [k, v] = trimed.split(":")
-      MdDoc.setMeta(k, v)
+      let [k, ...v] = trimed.split(":")
+      MdDoc.setMeta(k, _.trim(v.join(":")))
       lastMetaKey = k
     }
   }
@@ -867,16 +967,35 @@ function CheapParseMarkdown(markdown="") {
   // Scan document body
   for(; lnIndex < lines.length; lnIndex++) {
     let line = lines[lnIndex]
-    let {repush, closed} = block.pushLine(line) || {}
+    let trimed = _.trim(line)
+
+    // Link Refer 
+    let m = /^\[([^\]]+)\]:(.+)$/.exec(trimed)
+    if(m) {
+      let name  = _.trim(m[1])
+      let refer = _.trim(m[2])
+      MdDoc.setRefer(name, refer)
+      continue
+    }
+
+    // Elements
+    let {repush, closed} = block.pushLine(line, trimed) || {}
+
     // Closed block
     if(closed && !block.isEmpty()) {
       MdDoc.$body.appendChild(block.$top)
       block.reset()
     }
+
     // push again
     if(repush) {
       lnIndex --
     }
+  }
+  //.................................................
+  // Tail Block
+  if(!block.isEmpty()){
+    MdDoc.$body.appendChild(block.$top)
   }
   //.................................................
   return MdDoc
