@@ -9,7 +9,13 @@ class CheapNode {
   constructor(nodeType="Element", parentNode=null) {
     this.nodeType = nodeType
     if(parentNode) {
-      parentNode.appendChild(this)
+      if(parentNode instanceof CheapNode) {
+        parentNode.appendChild(this)
+      }
+      // Append Document
+      else if(parentNode instanceof CheapDocument){
+        this.$document = parentNode
+      }
     }
   }
   //---------------------------------------------------
@@ -18,6 +24,19 @@ class CheapNode {
       this.children = []
     }
     return this.children
+  }
+  //---------------------------------------------------
+  document() {
+    if(!this.$document) {
+      if(this.parentNode) {
+        this.$document = this.parentNode.document()
+      }
+    }
+    return this.$document
+  }
+  //---------------------------------------------------
+  body() {
+    return this.document().getBodyElement()
   }
   //---------------------------------------------------
   isElementNode() {return "Element" == this.nodeType}
@@ -45,10 +64,13 @@ class CheapNode {
   //---------------------------------------------------
   appendChild(node) {
     node.parentNode = this
+    node.$document = this.$document
     this.__children().push(node)
   }
   //---------------------------------------------------
   prependChild(node) {
+    node.parentNode = this
+    node.$document = this.$document
     this.__children().unshift(node)
   }
   //---------------------------------------------------
@@ -67,13 +89,13 @@ class CheapNode {
         ? "|-- "
         : ""
       let display = value.display
-        ? `{${value.display}}`
+        ? `<${value.display}>`
         : ""
       let attrs = value.attrs && !_.isEmpty(value.attrs)
         ? JSON.stringify(value.attrs)
         : ""
-      let text = _.isString(value) ? value : ""
-      ss.push(`${_.repeat("|   ", depth-1)}${prefix}${name} ${display} ${attrs}${text}`)
+      let text = _.isString(value) ? `"${_.trim(value)}"` : ""
+      ss.push(`${_.repeat("|   ", depth-1)}${prefix}${name}${display}${attrs}${text}`)
     })
     return ss.join("\n")
   }
@@ -112,18 +134,29 @@ class CheapTextNode extends CheapNode {
 class CheapElement extends CheapNode {
   //---------------------------------------------------
   constructor(tagName="P", display="block", {
+    closeBy = "EndTag", // Self | EndTag
     style = {},   // bold, italic, underline
     attrs = {}
   }={}, parentNode=null) {
     super("Element", parentNode)
     this.tagName = _.toUpper(tagName)
     this.display = _.toLower(display)
-    this.style = style || {}
-    this.attrs = attrs || {}
+    this.style   = style || {}
+    this.attrs   = attrs || {}
+    this.closed  = closed
   }
   //---------------------------------------------------
-  getAttr(name) {
-    return this.attrs[name]
+  canSelfClose() {return "Self" == this.closeBy}
+  //---------------------------------------------------
+  hasAttrs(){
+    return !_.isEmpty(this.attrs)
+  }
+  //---------------------------------------------------
+  getAttr(name, dft) {
+    let val = this.attrs[name]
+    return _.isUndefined(val)
+      ? dft
+      : val
   }
   //---------------------------------------------------
   setAttr(name, value=true) {
@@ -136,8 +169,31 @@ class CheapElement extends CheapNode {
     }
   }
   //---------------------------------------------------
+  getRuntimeAttrs() {
+    return this.attrs || {}
+  }
+  //---------------------------------------------------
+  getRuntimeAttr(name, dft) {
+    let val = this.getRuntimeAttrs()[name]
+    return _.isUndefined(val)
+      ? dft
+      : val
+  }
+  //---------------------------------------------------
   isAttr(name, value) {
     return this.attrs[name] == value
+  }
+  //---------------------------------------------------
+  hasStyle(){
+    return !_.isEmpty(this.style)
+  }
+  //---------------------------------------------------
+  isDisplayAs(regex=/^inline/){
+    return regex.test(this.display)
+  }
+  //---------------------------------------------------
+  isDisplayAsInline(){
+    return this.isDisplayAs(/^inline/)
   }
   //---------------------------------------------------
   empty() {
@@ -154,6 +210,9 @@ class CheapElement extends CheapNode {
   }
   //---------------------------------------------------
   isTag(tagName) {
+    if(_.isRegExp(tagName)) {
+      return tagName.test(this.tagName)
+    }
     return this.tagName == tagName
   }
   //---------------------------------------------------
@@ -162,7 +221,7 @@ class CheapElement extends CheapNode {
     for(let nd of this.children){
       mds.push(nd.getMarkdown())
       if(nd.isElementNode() 
-         && /^(block|table)$/.test(nd.display)) {
+         && !nd.isDisplayAsInline()) {
         mds.push("\n\n")
       }
     }
@@ -191,12 +250,94 @@ class CheapElement extends CheapNode {
     super.treeWalk(depth, iteratee)
   }
   //---------------------------------------------------
+  getOutterHtml(options, depth=0) {
+    //console.log("getOutterHtml", this.tagName, depth, options)
+    // prefix for indent space
+    let prefix = options.indent > 0 && depth>0
+          ? _.repeat(" ", options.indent*depth)
+          : "";
+    // prepare str-buffer to render tag
+    let ss = []
+
+    // Block
+    if(!this.isDisplayAsInline()){
+      ss.push("\n", prefix)
+    }
+
+    // TagName
+    let tagName = _.toLower(this.tagName)
+    ss.push("<", tagName)
+    // Attributes
+    _.forEach(this.getRuntimeAttrs(options), (v, k)=>{
+      ss.push(` ${k}="${v}"`)
+    })
+
+    // Styles
+    if(this.hasStyle()){
+      ss.push(' style="')
+      _.forEach(this.style, (v, k)=>{
+        ss.push(`${k}:${v};`)
+      })
+      ss.push('"')
+    }
+
+    // Inner HTML
+    let html = this.getInnerHtml(options, depth+1);
+
+    // Closed if empty
+    if(!html) {
+      // Self close
+      if(this.canSelfClose()) {
+        ss.push("/>")
+      }
+      // Require close tag
+      else {
+        ss.push("></", tagName, ">")
+      }
+    }
+    // Join children
+    else {
+      ss.push(">")
+      if(this.isDisplayAsInline()) {
+        ss.push(html)  
+      }
+      // Block element
+      else {
+        ss.push(html)
+      }
+      // Close tag
+      ss.push("</", tagName, ">")
+    }
+    // done
+    return ss.join("")
+  }
+  //---------------------------------------------------
+  getInnerHtml(options, depth=0) {
+    // prepare to html render list
+    let html = []
+    if(this.hasChildren()){
+      for(let nd of this.children){
+        // Text Node
+        if(nd.isTextNode()) {
+          html.push(nd.getText())
+        }
+        // Element node
+        else if(nd.isElementNode()){
+          let ndHtml = nd.getOutterHtml(options, depth)
+          html.push(ndHtml)
+        }
+      }
+    }
+    return html.join("")
+  }
+  //---------------------------------------------------
   appendMarkdown(markdown) {
+    //console.log("--", markdown)
     //......................................
     // Define the regex
     let reg = '(\\*([^*]+)\\*)'
         + '|(\\*\\*([^*]+)\\*\\*)'
-        + '|(__?([^_]+)__?)'
+        + '|((?<=(\\s|^))_{1,2}(\\S+)_{1,2}(?=(\\s|$)))'
         + '|(~~([^~]+)~~)'
         + '|(`([^`]+)`)'
         + '|(!\\[([^\\]]*)\\]\\(([^\\)]+)\\))'
@@ -211,42 +352,27 @@ class CheapElement extends CheapNode {
     //......................................
     // In loop
     while (m = REG.exec(markdown)) {
-      //console.log(m)
       // B/EM: __xxx__ or _xxx_
       if (m[5]) {
         let token = m[5]
-        // Must with space or boundary
-        if(m.index!=0){
-          let c = markdown.charAt(m.index-1)
-          if('\t'!=c && ' '!=c){
-            continue
-          }
-        }
-        let rbI = m.index + token.length
-        if(rbI!=markdown.length){
-          let c = markdown.charAt(rbI)
-          if('\t'!=c && ' '!=c){
-            continue
-          }
-        }
-        // B
+        // STRONG: __xxx__
         if(token.startsWith("__") && token.endsWith("__")){
           // !Head-Text
           if (pos < m.index) {
-            var text = markdown.substring(pos, m.index);
+            let text = markdown.substring(pos, m.index);
             new CheapTextNode(text, this)
           }
-          new CheapBoldElement(this).setText(m[6])
+          new CheapStrongElement(this).setText(token.substring(2, token.length-2))
           pos = m.index + m[0].length
         }
-        // EM
+        // EM: _xxx_
         else if(token.startsWith("_") && token.endsWith("_")){
           // !Head-Text
           if (pos < m.index) {
-            var text = markdown.substring(pos, m.index);
+            let text = markdown.substring(pos, m.index);
             new CheapTextNode(text, this)
           }
-          new CheapEmphasisElement(this).setText(m[6])
+          new CheapEmphasisElement(this).setText(token.substring(1, token.length-1))
           pos = m.index + m[0].length
         }
         // Normal Text
@@ -255,30 +381,31 @@ class CheapElement extends CheapNode {
       //....................................
       // !Head-Text
       if (pos < m.index) {
-        var text = markdown.substring(pos, m.index);
+        let text = markdown.substring(pos, m.index);
         new CheapTextNode(text, this)
       }
-      // EM: *xxx*
+      // I: *xxx*
       if (m[1]) {
-        new CheapEmphasisElement(this).setText(m[2])
+        new CheapItalicElement(this).setText(m[2])
       }
       // B: **xxx**
       else if (m[3]) {
         new CheapBoldElement(this).setText(m[4])
       }
       // DEL: ~~xxx~~
-      else if (m[7]) {
-        new CheapDeletedTextElement(this).setText(m[8])
+      else if (m[9]) {
+        new CheapDeletedTextElement(this).setText(m[10])
       }
       // CODE: `xxx`
-      else if (m[9]) {
-        let s2 = m[10]
+      else if (m[11]) {
+        let s2 = m[12]
         new CheapCodeElement(this).setText(s2)
       }
       // IMG or Video: ![](xxxx)
-      else if(m[11]) {
-        let alt = _.trim(m[12])
-        let src = _.trim(m[13])
+      else if(m[13]) {
+        // console.log("found image", m[13], m[0])
+        let alt = _.trim(m[14])
+        let src = _.trim(m[15])
         let attrs = {src, alt}
 
         // Customized width/height
@@ -304,9 +431,9 @@ class CheapElement extends CheapNode {
         }
       }
       // A: [](xxxx)
-      else if (m[14]) {
-        let href = m[16]
-        let text = m[15]
+      else if (m[16]) {
+        let href = m[18]
+        let text = m[17]
         let attrs = {href}
 
         // New Tab
@@ -321,9 +448,9 @@ class CheapElement extends CheapNode {
         $an.appendText(text || href)
       }
       // A: [][refer]
-      else if(m[17]) {
-        let refer = m[19]
-        let text = m[18]
+      else if(m[19]) {
+        let refer = m[21]
+        let text = m[20]
         let attrs = {refer}
 
         // New Tab
@@ -338,8 +465,8 @@ class CheapElement extends CheapNode {
         $an.appendText(text || refer)
       }
       // A: http://xxxx
-      else if(m[20]) {
-        let href = m[20]
+      else if(m[22]) {
+        let href = m[22]
         let $an = new CheapAnchorElement(this)
         $an.setAttr({href, primaryLink:true})
         $an.appendText(href)
@@ -364,40 +491,118 @@ class CheapBoldElement extends CheapElement {
   constructor(parentNode=null) {
     super("B", "inline", {}, parentNode)
   }
+  getMarkdown(){return `**${super.getMarkdown()}**`}
 }
 class CheapItalicElement extends CheapElement {
   constructor(parentNode=null) {
-    super("EM", "inline", {}, parentNode)
+    super("I", "inline", {}, parentNode)
   }
+  getMarkdown(){return `*${super.getMarkdown()}*`}
+}
+class CheapStrongElement extends CheapElement {
+  constructor(parentNode=null) {
+    super("STRONG", "inline", {}, parentNode)
+  }
+  getMarkdown(){return `__${super.getMarkdown()}__`}
 }
 class CheapEmphasisElement extends CheapElement {
   constructor(parentNode=null) {
     super("EM", "inline", {}, parentNode)
   }
+  getMarkdown(){return `_${super.getMarkdown()}_`}
 }
 class CheapDeletedTextElement extends CheapElement {
   constructor(parentNode=null) {
     super("DEL", "inline", {}, parentNode)
   }
+  getMarkdown(){return `~~${super.getMarkdown()}~~`}
 }
 class CheapCodeElement extends CheapElement {
   constructor(parentNode=null) {
     super("CODE", "inline", {}, parentNode)
   }
+  getMarkdown(){return `\`~~${super.getMarkdown()}~~\``}
 }
 class CheapAnchorElement extends CheapElement {
+  //---------------------------------------------------
   constructor(parentNode=null) {
     super("A", "inline", {}, parentNode)
   }
+  //---------------------------------------------------
+  getMarkdown(){
+    let ref  = this.getAttr("refer")
+    let href = this.getAttr("href")
+    let text = this.getText()
+    let newT = this.isAttr("target", "_blank")
+    if(href == text){
+      return href
+    }
+    if(newT) {
+      text = "+" + text
+    }
+    if(ref) {
+      return `[${text}][${ref}]`
+    }
+    return `[${text}](${href})`
+  }
+  //---------------------------------------------------
+  getRuntimeAttrs({anchorHref}={}) {
+    let attrs = _.assign({}, this.attrs)
+    // Explain refers
+    if(attrs.refer) {
+      let href = this.document().getRefer(attrs.refer)
+      attrs.href = href
+    }
+    // Eval to real href
+    if(attrs.href) {
+      attrs.href = anchorHref(attrs.href)
+    }
+    // Done
+    return attrs
+  }
+  //---------------------------------------------------
 }
-class CheapImageElement extends CheapElement {
+///////////////////////////////////////////////////////
+class CheapMediaElement extends CheapElement {
+  //---------------------------------------------------
+  constructor(tagName, display, setup, parentNode=null) {
+    super(tagName, display, setup, parentNode)
+  }
+  //---------------------------------------------------
+  getMarkdown(){
+    let src  = this.getAttr("src")
+    let size = _.without([
+      this.getAttr("width",null),
+      this.getAttr("height",null)
+    ], null)
+    let alts = _.without([
+      size.join("-"), this.getAttr("alt", "")
+    ], "")
+
+    return `![${alts.join(":")}](${src})`
+  }
+  //---------------------------------------------------
+  getRuntimeAttrs({mediaSrc}={}) {
+    let attrs = _.assign({}, this.attrs)
+    // Eval to real src
+    if(attrs.src) {
+      attrs.src = mediaSrc(attrs.src)
+    }
+    // Done
+    return attrs
+  }
+  //---------------------------------------------------
+}
+class CheapImageElement extends CheapMediaElement {
   constructor(parentNode=null) {
-    super("IMG", "inline", {}, parentNode)
+    super("IMG", "inline", {closeBy:"Self"}, parentNode)
   }
 }
-class CheapVideoElement extends CheapElement {
+class CheapVideoElement extends CheapMediaElement {
   constructor(parentNode=null) {
-    super("VIDEO", "inline", {}, parentNode)
+    super("VIDEO", "inline", {
+      attrs: {controls:true}
+    }, parentNode)
   }
 }
 ///////////////////////////////////////////////////////
@@ -431,7 +636,7 @@ class CheapTableRowElement extends CheapElement {
   appendMarkdown(markdown) {
     // Split Cells
     let ss = _.without(markdown.split("|"), "")
-
+    
     // Gen cells
     for(let s of ss) {
       let $cell = new CheapTableDataCellElement(this)
@@ -473,7 +678,7 @@ class CheapListItemElement extends CheapElement {
 ///////////////////////////////////////////////////////
 class CheapHrElement extends CheapElement {
   constructor(parentNode=null){
-    super("HR", "block", {},  parentNode)
+    super("HR", "block", {closeBy:"Self"},  parentNode)
   }
 }
 ///////////////////////////////////////////////////////
@@ -501,7 +706,7 @@ class CheapPreformattedTextElement extends CheapElement {
     let mds = []
     let prefix = this.isGFMCode() ? "" : "    ";
     if(this.isGFMCode()) {
-      mds.push("```" + this.getCodeType(""))
+      mds.push("```", this.getCodeType(""), "\n")
     }
     for(let nd of this.children){
       mds.push(prefix + nd.getMarkdown())
@@ -509,7 +714,7 @@ class CheapPreformattedTextElement extends CheapElement {
     if(this.isGFMCode()) {
       mds.push("```")
     }
-    return mds.join("\n")
+    return mds.join("")
   }
   //---------------------------------------------------
 }
@@ -549,26 +754,59 @@ class CheapBodyElement extends CheapElement {
 class CheapDocument {
   //---------------------------------------------------
   constructor(){
-    this.$body = new CheapBodyElement()
+    this.$body = new CheapBodyElement(this)
     this.$meta = {}
     this.$refs = {}
   }
   //---------------------------------------------------
-  setMeta(name, value) {
-    this.$meta[name] = value
+  getBodyElement() {
+    return this.$body
+  }
+  //---------------------------------------------------
+  getRefer(name, dft) {
+    return this.$refs[name] || dft
   }
   //---------------------------------------------------
   setRefer(name, value) {
-    this.$refs[name] = value
+    let k = _.trim(name)
+    let v = _.trim(value)
+    this.$refs[k] = v
+  }
+  //---------------------------------------------------
+  getMeta(name, dft) {
+    return this.$meta[name] || dft
+  }
+  //---------------------------------------------------
+  setMeta(name, value) {
+    let k = _.trim(name)
+    let v = _.trim(value)
+    this.$meta[k] = v
   }
   //---------------------------------------------------
   pushMetaValue(name, value) {
-    let val = this.$meta[name]
-    if(!_.isArray(val)) {
-      val = val ? [val] : []
-      this.$meta[name] = val
+    let k = _.trim(name)
+    let v = _.trim(value)
+    let vs = this.$meta[k]
+    if(!_.isArray(vs)) {
+      vs = vs ? [vs] : []
+      this.$meta[k] = vs
     }
-    val.push(value)
+    vs.push(v)
+  }
+  //---------------------------------------------------
+  /***
+   * @param mediaSrc{Function}: `F(src, CheapElement)`
+   * @param anchorHref{Function}: `F(href, CheapElement)`
+   * @param indent{Number}: indent space number
+   * 
+   * @return document body innerHTML
+   */
+  toBodyInnerHtml({
+    mediaSrc   = _.identity,
+    anchorHref = _.identity,
+    indent     = 2
+  }={}) {
+    return this.$body.getInnerHtml({mediaSrc, anchorHref, indent})
   }
   //---------------------------------------------------
   toString() {
@@ -682,7 +920,7 @@ class CheapBlock {
         }
         // Join Code
         else {
-          this.$top.addCodeLine(line)
+          this.$top.addCodeLine(line+"\n")
         }
       }
       // Indent code
@@ -690,7 +928,7 @@ class CheapBlock {
         // Still indent code
         if(cI > 0) {
           let codeLine = line.substring(cI)
-          this.$top.addCodeLine(codeLine)
+          this.$top.addCodeLine(codeLine+"\n")
         }
         // Quit indent
         else {
@@ -740,12 +978,13 @@ class CheapBlock {
       //-----------------------------------
       // find parent
       else {
-        $list = this.$li.parentNode
-        let $li = $list.parentNode
-        while($li && $li.isTag("LI") && $li.getAttr("depth")>=myDepth) {
+        let $li = this.$li
+        do {
+          $li = $li.parentNode.parentNode
+          if(!$li)
+            break
           $list = $li.parentNode
-          $li = $list.parentNode
-        }
+        } while($li && $li.isTag("LI") && $li.getAttr("depth")>myDepth)
         // Repush
         if(!$li || !$li.isTag("LI")){
           return {closed:true, repush:true}
@@ -783,12 +1022,12 @@ class CheapBlock {
           depth : parseInt(indent / listIndent)
         })
         let text = _.trim(trimed.substring(2))
-        this.$li.appendMarkdown(text)
+        this.$li.appendMarkdown(text+"\n")
       }
       //-----------------------------------
       // <P> append children
       else {
-        $list.appendMarkdown(trimed)
+        $list.appendMarkdown(trimed+"\n")
       }
       //-----------------------------------
       return
@@ -803,7 +1042,7 @@ class CheapBlock {
     // >>> TABLE
     if(this.$tbody) {
       let $row = new CheapTableRowElement(this.$tbody)
-      $row.appendMarkdown(trimed)
+      $row.appendMarkdown(trimed+"\n")
       return
     }
     //.................................................
@@ -812,7 +1051,7 @@ class CheapBlock {
     if(m) {
       let n = m[1].length
       this.$top = new CheapSectionHeadingElement(n)
-      this.$top.appendMarkdown(m[2])
+      this.$top.appendMarkdown(m[2]+"\n")
       return {closed:true}
     }
     //.................................................
@@ -821,7 +1060,7 @@ class CheapBlock {
       this.$top = new CheapPreformattedTextElement()
       this.$top.setAttr({mode: "MARKDOWN"})
       let codeLine = line.substring(cI)
-      this.$top.addCodeLine(codeLine)
+      this.$top.addCodeLine(codeLine+"\n")
       return
     }
     //.................................................
@@ -848,7 +1087,7 @@ class CheapBlock {
       }
       this.$top = new CheapBlockQuoteElement()
       let text = _.trim(trimed.substring(1))
-      this.$top.appendMarkdown(text)
+      this.$top.appendMarkdown(text+"\n")
       return
     }
     //.................................................
@@ -879,7 +1118,7 @@ class CheapBlock {
       })
       // append list item content
       let text = _.trim(trimed.substring(2))
-      this.$li.appendMarkdown(text)
+      this.$li.appendMarkdown(text+"\n")
       return
     }
     //.................................................
@@ -899,7 +1138,7 @@ class CheapBlock {
     if(this.isEmpty()) {
       this.$top = new CheapParagraphElement()
     }
-    this.$top.appendMarkdown(line)
+    this.$top.appendMarkdown(line+"\n")
     //.................................................
   }
   //---------------------------------------------------
