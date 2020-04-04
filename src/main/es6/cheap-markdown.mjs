@@ -355,24 +355,24 @@ class CheapElement extends CheapNode {
       // B/EM: __xxx__ or _xxx_
       if (m[5]) {
         let token = m[5]
-        // STRONG: __xxx__
+        // B: __xxx__
         if(token.startsWith("__") && token.endsWith("__")){
           // !Head-Text
           if (pos < m.index) {
             let text = markdown.substring(pos, m.index);
             new CheapTextNode(text, this)
           }
-          new CheapStrongElement(this).setText(token.substring(2, token.length-2))
+          new CheapBoldElement(this).setText(token.substring(2, token.length-2))
           pos = m.index + m[0].length
         }
-        // EM: _xxx_
+        // I: _xxx_
         else if(token.startsWith("_") && token.endsWith("_")){
           // !Head-Text
           if (pos < m.index) {
             let text = markdown.substring(pos, m.index);
             new CheapTextNode(text, this)
           }
-          new CheapEmphasisElement(this).setText(token.substring(1, token.length-1))
+          new CheapItalicElement(this).setText(token.substring(1, token.length-1))
           pos = m.index + m[0].length
         }
         // Normal Text
@@ -384,13 +384,13 @@ class CheapElement extends CheapNode {
         let text = markdown.substring(pos, m.index);
         new CheapTextNode(text, this)
       }
-      // I: *xxx*
+      // EM: *xxx*
       if (m[1]) {
-        new CheapItalicElement(this).setText(m[2])
+        new CheapEmphasisElement(this).setText(m[2])
       }
-      // B: **xxx**
+      // STRONG: **xxx**
       else if (m[3]) {
-        new CheapBoldElement(this).setText(m[4])
+        new CheapStrongElement(this).setText(m[4])
       }
       // DEL: ~~xxx~~
       else if (m[9]) {
