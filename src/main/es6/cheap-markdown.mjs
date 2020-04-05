@@ -1144,7 +1144,7 @@ class CheapBlock {
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
-function CheapParseMarkdown(markdown="") {
+function parseMarkdown(markdown="") {
   //.................................................
   // Prapare
   let lines   = markdown.split(/\r?\n/)
@@ -1240,10 +1240,14 @@ function CheapParseMarkdown(markdown="") {
   return MdDoc
 }
 ///////////////////////////////////////////////////////
+// Delta object please:
+// @see https://quilljs.com/docs/delta/
+function parseDelta({ops=[]}={}){
+  
+}
+///////////////////////////////////////////////////////
 export const Cheap = {
-  parseMarkdown(markdown) {
-    return CheapParseMarkdown(markdown)
-  }
+  parseMarkdown
 }
 ///////////////////////////////////////////////////////
 // Install to window
