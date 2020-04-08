@@ -116,6 +116,16 @@ class CheapNode {
     }
   }
   //---------------------------------------------------
+  joinDelta(delta=[], config) {
+    let lastOp;
+    if(this.hasChildren()) {
+      for(let child of this.children) {
+        lastOp = child.joinDelta(delta, config)
+      }
+    }
+    return lastOp
+  }
+  //---------------------------------------------------
   toString() {
     let ss = []
     this.treeWalk(0, ({depth, name, value})=>{
@@ -128,7 +138,7 @@ class CheapNode {
       let attrs = value.attrs && !_.isEmpty(value.attrs)
         ? JSON.stringify(value.attrs)
         : ""
-      let text = _.isString(value) ? `"${_.trim(value)}"` : ""
+      let text = _.isString(value) ? `"${value}"` : ""
       ss.push(`${_.repeat("|   ", depth-1)}${prefix}${name}${display}${attrs}${text}`)
     })
     return ss.join("\n")
@@ -167,8 +177,22 @@ class CheapTextNode extends CheapNode {
     iteratee({
       depth,
       name  : "!TEXT",
-      value : this.text
+      value : this.text.replace("\n", "\\n")
     })
+  }
+  //---------------------------------------------------
+  joinDelta(delta=[], {autoJoinPrev=true}={}) {
+    let lastOp = _.last(delta)
+    // // Join Text
+    if(autoJoinPrev && lastOp && _.isString(lastOp.insert) && !lastOp.attributes) {
+      lastOp.insert += this.text
+    }
+    // New Node
+    else {
+      lastOp = {insert: this.text}
+      delta.push(lastOp)
+    }
+    return lastOp
   }
   //---------------------------------------------------
 }
@@ -187,7 +211,7 @@ class CheapElement extends CheapNode {
     this.className = className
     this.style   = style || {}
     this.attrs   = attrs || {}
-    this.closed  = closed
+    this.closeBy = closeBy
   }
   //---------------------------------------------------
   canSelfClose() {return "Self" == this.closeBy}
@@ -281,11 +305,13 @@ class CheapElement extends CheapNode {
   //---------------------------------------------------
   getMarkdown(config) {
     let mds = []
-    for(let nd of this.children){
-      mds.push(nd.getMarkdown(config))
-      if(nd.isElementNode() 
-         && !nd.isDisplayAsInline()) {
-        mds.push("\n")
+    if(_.isArray(this.children)) {
+      for(let nd of this.children){
+        mds.push(nd.getMarkdown(config))
+        // if(nd.isElementNode() 
+        //   && !nd.isDisplayAsInline()) {
+        //   mds.push("\n")
+        // }
       }
     }
     // Remove the Endle "\n\n"
@@ -561,36 +587,66 @@ class CheapBoldElement extends CheapElement {
     super("B", "inline", {}, parentNode)
   }
   getMarkdown(){return `__${super.getMarkdown()}__`}
+  joinDelta(delta=[], config){
+    let lastOp = super.joinDelta(delta, {autoJoinPrev:false});
+    _.set(lastOp, "attributes.bold", true)
+    return lastOp
+  }
 }
 class CheapItalicElement extends CheapElement {
   constructor(parentNode=null) {
     super("I", "inline", {}, parentNode)
   }
   getMarkdown(){return `_${super.getMarkdown()}_`}
+  joinDelta(delta=[], config){
+    let lastOp = super.joinDelta(delta, {autoJoinPrev:false});
+    _.set(lastOp, "attributes.italic", true)
+    return lastOp
+  }
 }
 class CheapStrongElement extends CheapElement {
   constructor(parentNode=null) {
     super("STRONG", "inline", {}, parentNode)
   }
   getMarkdown(){return `**${super.getMarkdown()}**`}
+  joinDelta(delta=[], config){
+    let lastOp = super.joinDelta(delta, {autoJoinPrev:false});
+    _.set(lastOp, "attributes.bold", true)
+    return lastOp
+  }
 }
 class CheapEmphasisElement extends CheapElement {
   constructor(parentNode=null) {
     super("EM", "inline", {}, parentNode)
   }
   getMarkdown(){return `*${super.getMarkdown()}*`}
+  joinDelta(delta=[], config){
+    let lastOp = super.joinDelta(delta, {autoJoinPrev:false});
+    _.set(lastOp, "attributes.italic", true)
+    return lastOp
+  }
 }
 class CheapDeletedTextElement extends CheapElement {
   constructor(parentNode=null) {
     super("DEL", "inline", {}, parentNode)
   }
   getMarkdown(){return `~~${super.getMarkdown()}~~`}
+  joinDelta(delta=[], config){
+    let lastOp = super.joinDelta(delta, {autoJoinPrev:false});
+    _.set(lastOp, "attributes.strike", true)
+    return lastOp
+  }
 }
 class CheapCodeElement extends CheapElement {
   constructor(parentNode=null) {
     super("CODE", "inline", {}, parentNode)
   }
   getMarkdown(){return `\`${super.getMarkdown()}\``}
+  joinDelta(delta=[], config){
+    let lastOp = super.joinDelta(delta, {autoJoinPrev:false});
+    _.set(lastOp, "attributes.code", true)
+    return lastOp
+  }
 }
 class CheapAnchorElement extends CheapElement {
   //---------------------------------------------------
@@ -615,7 +671,13 @@ class CheapAnchorElement extends CheapElement {
     return `[${text}](${href})`
   }
   //---------------------------------------------------
-  getRuntimeAttrs({anchorHref}={}) {
+  joinDelta(delta=[], config){
+    let lastOp = super.joinDelta(delta, {autoJoinPrev:false});
+    _.set(lastOp, "attributes.link", this.getRuntimeAttrs(config).href)
+    return lastOp
+  }
+  //---------------------------------------------------
+  getRuntimeAttrs({anchorHref=_.identity}={}) {
     let attrs = _.assign({}, this.attrs)
     // Explain refers
     if(attrs.refer) {
@@ -722,9 +784,35 @@ class CheapTableDataCellElement extends CheapElement {
 }
 ///////////////////////////////////////////////////////
 class CheapListElement extends CheapElement {
+  //---------------------------------------------------
   constructor(tagName, parentNode=null){
     super(tagName, "block", {}, parentNode)
   }
+  //---------------------------------------------------
+  joinDelta(delta=[], config){
+    if(this.hasChildren()) {
+      let listType = this.isTag("OL") ? "ordered" : "bullet"
+      let lastOp;
+      for(let $li of this.children) {
+        $li.joinDelta(delta, config)
+        lastOp = _.last(delta)
+        if(lastOp.insert.endsWith("\n")){
+          lastOp.insert += "\n"
+        } else {
+          lastOp = {insert:"\n"}
+          delta.push(lastOp)
+        }
+        _.set(lastOp, "attributes.list", listType)
+        let indent = $li.getAttr("indent", 0)
+        if(indent > 0) {
+          _.set(lastOp, "attributes.indent", indent)
+        }
+      }
+      return lastOp
+    }
+    return _.last(delta)
+  }
+  //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
 class CheapOrderedListElement extends CheapListElement {
@@ -793,25 +881,75 @@ class CheapPreformattedTextElement extends CheapElement {
     return this.getAttr("type") || dft
   }
   //---------------------------------------------------
-  addCodeLine(codeLine) {
-    if(!_.isUndefined(codeLine) && !_.isNull(codeLine)) {
-      new CheapTextNode(codeLine, this)
+  // "xxx" => Text("xxx") + Text("\n")
+  // "xxx\n" => Text("xxx") + Text("\n")
+  // "xxx\n\n" => Text("xxx") + Text("\n") + Text("\n")
+  // "xxx\nxxx" => Text("xxx") + Text("\n") + Text("xxx") + Text("\n")
+  addCodeLine(codeLine="") {
+    let lines = codeLine.split("\n")
+    // Mark sure end by empty line
+    if(_.last(lines)) {
+      lines.push("")
+    }
+    // Join sub-text nodes
+    for(let line of lines) {
+      // \n
+      if(!line) {
+        new CheapTextNode("\n", this)
+      }
+      // xxx
+      else {
+        new CheapTextNode(line, this)
+      }
     }
   }
   //---------------------------------------------------
   getMarkdown() {
     let mds = []
+    //.................................................
     let prefix = this.isGFMCode() ? "" : "    ";
     if(this.isGFMCode()) {
       mds.push("\n```", this.getCodeType(""), "\n")
+    } else {
+      mds.push(`\n${prefix}`)
     }
-    for(let nd of this.children){
-      mds.push(prefix + nd.getMarkdown())
+    //.................................................
+    if(this.hasChildren()){
+      for(let nd of this.children){
+        let line = nd.getText()
+        if("\n" == line) {
+          mds.push("\n")
+        } else {
+          mds.push(prefix, line)
+        }
+      }
     }
+    //.................................................
     if(this.isGFMCode()) {
       mds.push("```\n")
+    } else {
+      mds.push(`\n${prefix}`)
     }
+    //.................................................
     return mds.join("")
+  }
+  //---------------------------------------------------
+  joinDelta(delta=[], config){
+    if(this.hasChildren()){
+      for(let nd of this.children){
+        let line = nd.getText()
+        if("\n" == line) {
+          delta.push({insert:"\n", attributes:{"code-block": true}})
+        } else {
+          delta.push({insert:line})
+        }
+      }
+    }
+    // Empty
+    else {
+      delta.push({insert:"\n", attributes:{"code-block": true}})
+    }
+    return _.last(delta)
   }
   //---------------------------------------------------
 }
@@ -829,12 +967,19 @@ class CheapBlockQuoteElement extends CheapElement {
     return mds.join("")
   }
   //---------------------------------------------------
+  joinDelta(delta=[], config){
+    super.joinDelta(delta, config)
+    let lastOp = {insert:"\n", attributes:{blockquote: true}}
+    delta.push(lastOp)
+    return _.last(delta)
+  }
+  //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
 class CheapSectionHeadingElement extends CheapElement {
   //---------------------------------------------------
   constructor(level=1, parentNode=null){
-    super(`H${level}`, "block", {level},  parentNode)
+    super(`H${level}`, "block", {attrs:{level}},  parentNode)
   }
   //---------------------------------------------------
   getMarkdown(config) {
@@ -843,6 +988,13 @@ class CheapSectionHeadingElement extends CheapElement {
     mds.push(super.getMarkdown(config))
     mds.push("\n")
     return mds.join("")
+  }
+  //---------------------------------------------------
+  joinDelta(delta=[], config){
+    super.joinDelta(delta, config)
+    let lastOp = {insert:"\n", attributes:{header: this.getAttr("level", 1)}}
+    delta.push(lastOp)
+    return _.last(delta)
   }
   //---------------------------------------------------
 }
@@ -856,8 +1008,22 @@ class CheapParagraphElement extends CheapElement {
   getMarkdown(config) {
     let mds = []
     mds.push(super.getMarkdown(config))
-    mds.push("\n")
+    mds.push("\n\n")
     return mds.join("")
+  }
+  //---------------------------------------------------
+  joinDelta(delta=[], config){
+    let lastOp = super.joinDelta(delta, config)
+    if(lastOp && lastOp.insert && _.isString(lastOp.insert) && !lastOp.attributes) {
+      if(!lastOp.insert.endsWith("\n"))
+        lastOp.insert += "\n"
+    }
+    // New P
+    else {
+      lastOp = {insert: "\n"}
+      delta.push(lastOp)
+    }
+    return lastOp
   }
   //---------------------------------------------------
 }
@@ -883,6 +1049,9 @@ class CheapDocument {
   }
   //---------------------------------------------------
   getRefer(name, dft) {
+    if(_.isUndefined(name)) {
+      return this.$refs
+    }
     return this.$refs[name] || dft
   }
   //---------------------------------------------------
@@ -893,6 +1062,9 @@ class CheapDocument {
   }
   //---------------------------------------------------
   getMeta(name, dft) {
+    if(_.isUndefined(name)) {
+      return this.$meta
+    }
     return this.$meta[name] || dft
   }
   //---------------------------------------------------
@@ -900,6 +1072,10 @@ class CheapDocument {
     let k = _.trim(name)
     let v = _.trim(value)
     this.$meta[k] = v
+  }
+  //---------------------------------------------------
+  setDefaultMeta(metas={}) {
+    _.defaults(this.$meta, metas)
   }
   //---------------------------------------------------
   pushMetaValue(name, value) {
@@ -980,6 +1156,12 @@ class CheapDocument {
     }
     // done
     return md.join("\n")
+  }
+  //---------------------------------------------------
+  toDelta(config) {
+    let delta = []
+    this.$body.joinDelta(delta, config)
+    return delta
   }
   //---------------------------------------------------
 }
@@ -1076,7 +1258,7 @@ class CheapBlock {
         }
         // Join Code
         else {
-          this.$top.addCodeLine(line+"\n")
+          this.$top.addCodeLine(line)
         }
       }
       // Indent code
@@ -1084,7 +1266,7 @@ class CheapBlock {
         // Still indent code
         if(cI > 0) {
           let codeLine = line.substring(cI)
-          this.$top.addCodeLine(codeLine+"\n")
+          this.$top.addCodeLine(codeLine)
         }
         // Quit indent
         else {
@@ -1092,6 +1274,27 @@ class CheapBlock {
         }
       }
       return
+    }
+    //.................................................
+    // HR
+    if(/^(-{3,}|={3,})$/.test(trimed)) {
+      if(!this.isEmpty()) {
+        return {closed:true, repush:true}
+      }
+      this.$top = new CheapHrElement().setAttr({len: trimed.length})
+      return {closed:true}
+    }
+    //.................................................
+    // Heading : H1~6
+    m = /^(#{1,})[\t ]+(.*)$/.exec(trimed)
+    if(m) {
+      if(!this.isEmpty()) {
+        return {closed:true, repush:true}
+      }
+      let n = m[1].length
+      this.$top = new CheapSectionHeadingElement(n)
+      this.$top.appendMarkdown(m[2])
+      return {closed:true}
     }
     //.................................................
     // >>> List
@@ -1137,17 +1340,8 @@ class CheapBlock {
     // >>> TABLE
     if(this.$tbody) {
       let $row = new CheapTableRowElement(this.$tbody)
-      $row.appendMarkdown(trimed+"\n")
+      $row.appendMarkdown(trimed)
       return
-    }
-    //.................................................
-    // Heading : H1~6
-    m = /^(#{1,})[\t ]+(.*)$/.exec(trimed)
-    if(m) {
-      let n = m[1].length
-      this.$top = new CheapSectionHeadingElement(n)
-      this.$top.appendMarkdown(m[2]+"\n")
-      return {closed:true}
     }
     //.................................................
     // Indent Code
@@ -1155,7 +1349,7 @@ class CheapBlock {
       this.$top = new CheapPreformattedTextElement()
       this.$top.setAttr({mode: "MARKDOWN"})
       let codeLine = line.substring(cI)
-      this.$top.addCodeLine(codeLine+"\n")
+      this.$top.addCodeLine(codeLine)
       return
     }
     //.................................................
@@ -1169,20 +1363,14 @@ class CheapBlock {
       return
     }
     //.................................................
-    // HR
-    if(/^(-{3,}|={3,})$/.test(trimed)) {
-      this.$top = new CheapHrElement().setAttr({len: trimed.length})
-      return {closed:true}
-    }
-    //.................................................
     // BLOCKQUOTE
     if(trimed.startsWith('>')) {
-      if(!this.isEmpty() && !this.isTopTag("BLOCKQUOTE")){
+      if(!this.isEmpty()){
         return {repush:true, closed:true}
       }
       this.$top = new CheapBlockQuoteElement()
       let text = _.trim(trimed.substring(1))
-      this.$top.appendMarkdown(text+"\n")
+      this.$top.appendMarkdown(text)
       return
     }
     //.................................................
@@ -1213,7 +1401,7 @@ class CheapBlock {
 
       // append list item content
       let text = _.trim(trimed.substring(2))
-      this.$li.appendMarkdown(text+"\n")
+      this.$li.appendMarkdown(text)
       return
     }
     //.................................................
@@ -1233,7 +1421,7 @@ class CheapBlock {
     if(this.isEmpty()) {
       this.$top = new CheapParagraphElement()
     }
-    this.$top.appendMarkdown(line+"\n")
+    this.$top.appendMarkdown(line)
     //.................................................
   }
   //---------------------------------------------------
@@ -1337,139 +1525,147 @@ function parseMarkdown(markdown="") {
 ///////////////////////////////////////////////////////
 // Delta object please:
 // @see https://quilljs.com/docs/delta/
+class DeltaHelper {
+  //.................................................
+  constructor(){
+    this.__buf = []
+  }
+  //.................................................
+  isBufEmpty() {
+    return _.isEmpty(this.__buf)
+  }
+  //.................................................
+  pushBuf($nd) {
+    this.__buf.push($nd)
+  }
+  //.................................................
+  popBuf($el) {
+    if($el) {
+      $el.appendChildren(this.__buf)
+    }
+    this.__buf = []
+    return $el
+  }
+  //.................................................
+  genInline(attr, text) {
+    let $el = new CheapTextNode(text)
+    // Code
+    if(attr.code) {
+      $el = new CheapCodeElement().appendChild($el);
+    }
+    // B/I/A
+    else {
+      if(attr.bold) {
+        $el = new CheapStrongElement().appendChild($el);
+      }
+      if(attr.italic) {
+        $el = new CheapEmphasisElement().appendChild($el);
+      }
+      if(attr.link) {
+        $el = new CheapAnchorElement()
+                  .setAttr({href:attr.link})
+                    .appendChild($el);
+      }
+    }
+    return $el
+  }
+  //.................................................
+  genBlock(attr) {
+    // List
+    if(attr.list) {
+      // LI
+      let $li = this.popBuf(new CheapListItemElement())
+      $li.setAttr({
+        indent: attr.indent || 0
+      })
+      // OL
+      if("ordered" == attr.list) {
+        return new CheapOrderedListElement().appendChild($li)
+      }
+      // UL
+      return new CheapUnorderedListElement().appendChild($li)
+    }
+    // Heading
+    if(attr.header) {
+      return this.popBuf(new CheapSectionHeadingElement(attr.header))
+    }
+    // BlockQuote
+    if(attr.blockquote) {
+      return this.popBuf(new CheapBlockQuoteElement())
+    }
+    // CodeBlock
+    if(attr["code-block"]) {
+      let $pre = new CheapPreformattedTextElement()
+      $pre.setAttr({mode:"GFM"})
+      if(this.isBufEmpty()) {
+        $pre.addCodeLine("")
+      } else {
+        _.forEach(this.__buf, $nd => $pre.addCodeLine($nd.getText()))
+      }
+      this.popBuf()
+      return $pre
+    }
+    // Paragraph
+    return this.popBuf(new CheapParagraphElement())
+  }
+  //.................................................
+}
+///////////////////////////////////////////////////////
 function parseDelta({ops=[]}={}){
   //.................................................
   let MdDoc = new CheapDocument()
   let $body = MdDoc.$body
   //.................................................
-  let __buf = []
-  //.................................................
-  const dump_buf = function($el) {
-    $el.appendChildren(__buf)
-    __buf = []
-    return $el
-  }
+  let helper = new DeltaHelper()
   //.................................................
   for(let op of ops) {
-    let text = op.insert
-    let attr = op.attributes || {}
-    let trimed = _.trim(text)
-    //.............................................
-    // Heading
-    if(attr.header) {
-      let $h = new CheapSectionHeadingElement(attr.header, $body)
-      dump_buf($h)
-    }
-    //.............................................
-    // List
-    else if(attr.list) {
-      let $lis = []
-      let ss = text.split("\n")
-      ss.pop()
-      for(let s of ss) {
-        let $li = dump_buf(new CheapListItemElement())
-        $li.setAttr({indent: attr.indent||0})
-        $lis.push($li)
+    let text  = op.insert
+    let attr  = op.attributes || {}
+    //...............................................
+    let I0 = 0
+    let I1 = text.indexOf("\n", I0)
+    while(I1 >= I0) {
+      //.............................................
+      // Found "xxx\n"
+      if(I1 > I0) {
+        let s = text.substring(I0, I1)
+        helper.pushBuf(new CheapTextNode(s))
       }
+      //.............................................
+      // Gen Block
+      let $nd = helper.genBlock(attr)
+      if($nd) {
+        let $last = $body.getLastChild()
 
-      // Current list type
-      let tagName = "ordered" == attr.list ? "OL" : "UL";
-      let newList = false
-
-      // Start new list
-      let $first = _.first($lis).getFirstChild()
-      if($first && $first.getText().startsWith("\n")) {
-        newList = true
-      }
-
-      // Join the last list
-      let $last = $body.getLastChild()
-      if(!newList && $last && $last.isTag(tagName)) {
-        $last.appendChildren($lis)
-      }
-      // New list
-      else {
-        let $list = "OL" == tagName
-            ? new CheapOrderedListElement($body)
-            : new CheapUnorderedListElement($body)
-        $list.appendChildren($lis)
-      }
-    }
-    //.............................................
-    // Code-Block
-    else if(attr["code-block"]) {
-      let ss = text.split("\n")
-      ss.pop()
-      if(ss.length > 1) {
-        let lastI = ss.length - 1
-        for(let i=0; i<lastI; i++) {
-          let s = ss[i]
-          // New P
-          if(!s) {
-            if(__buf.length > 0)
-              dump_buf(new CheapParagraphElement($body))
-          }
-          // Normal text
-          else {
-            __buf.push(new CheapTextNode(s+"\n"))
-          }
+        // Join to Last
+        if($last && $last.isTag($nd.tagName)
+          && !$last.isTag(/^(BLOCKQUOTE|P|H[1-6])$/)) {
+          $last.appendChildren($nd.children)
+        }
+        // Add new
+        else {
+          $body.appendChild($nd)
         }
       }
 
-      let $pre = $body.getLastChild()
-      // New code
-      if(!$pre || !$pre.isTag("PRE") || (trimed && text.startsWith("\n"))) {
-        $pre = new CheapPreformattedTextElement($body)
-        $pre.setAttr("mode", "GFM")
-      }
-      // Join code line
-      dump_buf($pre)
-      $pre.appendText("\n")
+      //.............................................
+      // Next find
+      I0 = I1 + 1
+      I1 = text.indexOf("\n", I0)
+      //.............................................
     }
-    //.............................................
-    // BlockQuote
-    else if(attr.blockquote) {
-      let $bq = new CheapBlockQuoteElement($body)
-      dump_buf($bq)
+    //...............................................
+    // Remain part join buffer
+    if(I0 < text.length) {
+      let s = text.substring(I0)
+      let $nd = helper.genInline(attr, s)
+      helper.pushBuf($nd)
     }
-    //.............................................
-    // Inline
-    else if(!text.endsWith("\n")) {
-      let $el = new CheapTextNode(text)
-      // Code
-      if(attr.code) {
-        $el = new CheapCodeElement().appendChild($el);
-      }
-      // B/I/A
-      else {
-        if(attr.bold) {
-          $el = new CheapStrongElement().appendChild($el);
-        }
-        if(attr.italic) {
-          $el = new CheapEmphasisElement().appendChild($el);
-        }
-        if(attr.link) {
-          $el = new CheapAnchorElement()
-                    .setAttr({href:attr.link})
-                      .appendChild($el);
-        }
-      }
-      __buf.push($el)
-    }
-    //.............................................
-    // Paragraph
-    else {
-      let ss = text.split("\n")
-      ss.pop()
-      for(let s of ss) {
-        dump_buf(new CheapParagraphElement($body)).appendText(s)
-      }
-    }
-    //.............................................
   }
   //.................................................
-  if(!_.isEmpty(__buf)) {
-    dump_buf(new CheapParagraphElement($body))
+  // Clean Buffer
+  if(!helper.isBufEmpty()) {
+    helper.popBuf(new CheapParagraphElement($body))
   }
   //.................................................
   return MdDoc
