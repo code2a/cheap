@@ -260,8 +260,8 @@ class CheapElement extends CheapNode {
     return this.attrs || {}
   }
   //---------------------------------------------------
-  getRuntimeAttr(name, dft) {
-    let val = this.getRuntimeAttrs()[name]
+  getRuntimeAttr(name, dft, config) {
+    let val = this.getRuntimeAttrs(config)[name]
     return _.isUndefined(val)
       ? dft
       : val
@@ -504,8 +504,8 @@ class CheapElement extends CheapNode {
         let attrs = {src, alt}
 
         // Customized width/height
-        // [100-50]
-        let m2 = /^([\d.]+(px|%|rem|em)?)(-([\d.]+(px|%|rem|em)?))?(:(.*))?$/.exec(alt);
+        // [100] or [100-50]
+        let m2 = /^([\d.]+(px|%|rem|em)?)?(-([\d.]+(px|%|rem|em)?))?(:(.*))?$/.exec(alt);
         if(m2){
           attrs.width  = m2[1]
           attrs.height = m2[4]
@@ -713,7 +713,19 @@ class CheapMediaElement extends CheapElement {
     return `![${alts.join(":")}](${src})`
   }
   //---------------------------------------------------
-  getRuntimeAttrs({mediaSrc}={}) {
+  joinDelta(delta=[], config){
+    let attrs = this.getRuntimeAttrs(config)
+    let src = attrs.src
+    let attributes = _.omit(attrs, "src")
+    let key = this.isTag("IMG") ? "image" : "video"
+    let op = {insert : {[key]:src}}
+    if(!_.isEmpty(attributes)) {
+      op.attributes = attributes
+    }
+    delta.push(op)
+  }
+  //---------------------------------------------------
+  getRuntimeAttrs({mediaSrc=_.identity}={}) {
     let attrs = _.assign({}, this.attrs)
     // Eval to real src
     if(attrs.src) {
@@ -1619,6 +1631,22 @@ function parseDelta({ops=[]}={}){
   let helper = new DeltaHelper()
   //.................................................
   for(let op of ops) {
+    //...............................................
+    // Media: Image
+    if(op.insert && op.insert.image) {
+      let $media = new CheapImageElement()
+      $media.setAttr(_.assign({src: op.insert.image}, op.attributes))
+      helper.pushBuf($media)
+      continue
+    }
+    // Media: Video
+    if(op.insert && op.insert.video) {
+      let $media = new CheapVideoElement()
+      $media.setAttr(_.assign({src: op.insert.video}, op.attributes))
+      helper.pushBuf($media)
+      continue
+    }
+    //...............................................
     let text  = op.insert
     let attr  = op.attributes || {}
     //...............................................
