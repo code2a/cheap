@@ -795,10 +795,23 @@ class CheapTableDataCellElement extends CheapElement {
   }
 }
 ///////////////////////////////////////////////////////
-class CheapListElement extends CheapElement {
+class CheapBlockElement extends CheapElement {
+  //---------------------------------------------------
+  constructor(tagName, setup, parentNode=null){
+    super(tagName, "block", setup, parentNode)
+  }
+  //---------------------------------------------------
+  getMarkdown(config) {
+    let md = super.getMarkdown(config)
+    return md + "\n"
+  }
+  //---------------------------------------------------
+}
+///////////////////////////////////////////////////////
+class CheapListElement extends CheapBlockElement {
   //---------------------------------------------------
   constructor(tagName, parentNode=null){
-    super(tagName, "block", {}, parentNode)
+    super(tagName, {}, parentNode)
   }
   //---------------------------------------------------
   joinDelta(delta=[], config){
@@ -853,14 +866,37 @@ class CheapListItemElement extends CheapElement {
     let mds = []
     let isUL = this.parentNode.isTag("UL")
     let myTab = isUL ? ulIndent : olIndent
-    let prefix = _.repeat(' ', myTab * this.getAttr("indent", 0));
+    let indent = this.getAttr("indent", 0)
+    let prefix = _.repeat(' ', myTab * indent);
     mds.push(prefix)
+    // UL
     if(isUL) {
-      mds.push("- ")
-    } else {
-      mds.push(`${this.index+1}. `)
+      let hc = this.getAttr("indent") % 2 == 0 ? "-" : "+"
+      mds.push(`${hc} `)
+    }
+    // OL
+    else {
+      let ix = 1
+      // get parent index seq
+      if(this.parentNode) {
+        let indexes = this.parentNode._ol_indexes
+        if(!indexes) {
+          indexes = []
+          this.parentNode._ol_indexes = indexes
+        }
+        ix = _.nth(indexes, indent)
+        if(_.isUndefined(ix)) {
+          ix = 1
+        } else {
+          ix ++
+        }
+        indexes[indent] = ix
+      }
+
+      mds.push(`${ix}. `)
     }
     mds.push(super.getMarkdown(config))
+    mds.push("\n")
     return mds.join("")
   }
   //---------------------------------------------------
@@ -966,10 +1002,10 @@ class CheapPreformattedTextElement extends CheapElement {
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
-class CheapBlockQuoteElement extends CheapElement {
+class CheapBlockQuoteElement extends CheapBlockElement {
   //---------------------------------------------------
   constructor(parentNode=null){
-    super("BLOCKQUOTE", "block", {},  parentNode)
+    super("BLOCKQUOTE", {},  parentNode)
   }
   //---------------------------------------------------
   getMarkdown(config) {
@@ -988,10 +1024,10 @@ class CheapBlockQuoteElement extends CheapElement {
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
-class CheapSectionHeadingElement extends CheapElement {
+class CheapSectionHeadingElement extends CheapBlockElement {
   //---------------------------------------------------
   constructor(level=1, parentNode=null){
-    super(`H${level}`, "block", {attrs:{level}},  parentNode)
+    super(`H${level}`, {attrs:{level}},  parentNode)
   }
   //---------------------------------------------------
   getMarkdown(config) {
@@ -1011,17 +1047,15 @@ class CheapSectionHeadingElement extends CheapElement {
   //---------------------------------------------------
 }
 ///////////////////////////////////////////////////////
-class CheapParagraphElement extends CheapElement {
+class CheapParagraphElement extends CheapBlockElement {
   //---------------------------------------------------
   constructor(parentNode=null){
     super("P", "block", {},  parentNode)
   }
   //---------------------------------------------------
   getMarkdown(config) {
-    let mds = []
-    mds.push(super.getMarkdown(config))
-    mds.push("\n\n")
-    return mds.join("")
+    let md = super.getMarkdown(config)
+    return md + "\n"
   }
   //---------------------------------------------------
   joinDelta(delta=[], config){
