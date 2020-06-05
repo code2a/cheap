@@ -116,11 +116,11 @@ class CheapNode {
     }
   }
   //---------------------------------------------------
-  joinDelta(delta=[], config) {
+  async joinDelta(delta=[], config) {
     let lastOp;
     if(this.hasChildren()) {
       for(let child of this.children) {
-        lastOp = child.joinDelta(delta, config)
+        lastOp = await child.joinDelta(delta, config)
       }
     }
     return lastOp
@@ -260,8 +260,8 @@ class CheapElement extends CheapNode {
     return this.attrs || {}
   }
   //---------------------------------------------------
-  getRuntimeAttr(name, dft, config) {
-    let val = this.getRuntimeAttrs(config)[name]
+  async getRuntimeAttr(name, dft, config) {
+    let val = await this.getRuntimeAttrs(config)[name]
     return _.isUndefined(val)
       ? dft
       : val
@@ -303,11 +303,12 @@ class CheapElement extends CheapNode {
     return this.tagName == tagName
   }
   //---------------------------------------------------
-  getMarkdown(config) {
+  async getMarkdown(config) {
     let mds = []
     if(_.isArray(this.children)) {
       for(let nd of this.children){
-        mds.push(nd.getMarkdown(config))
+        let mdSub = await nd.getMarkdown(config)
+        mds.push(mdSub)
         // if(nd.isElementNode() 
         //   && !nd.isDisplayAsInline()) {
         //   mds.push("\n")
@@ -339,7 +340,7 @@ class CheapElement extends CheapNode {
     super.treeWalk(depth, iteratee)
   }
   //---------------------------------------------------
-  getOutterHtml(options, depth=0) {
+  async getOutterHtml(options, depth=0) {
     //console.log("getOutterHtml", this.tagName, depth, options)
     // prefix for indent space
     let prefix = options.indent > 0 && depth>0
@@ -363,7 +364,8 @@ class CheapElement extends CheapNode {
     }
 
     // Attributes
-    _.forEach(this.getRuntimeAttrs(options), (v, k)=>{
+    let attrs = await this.getRuntimeAttrs(options)
+    _.forEach(attrs, (v, k)=>{
       ss.push(` ${k}="${v}"`)
     })
 
@@ -377,7 +379,7 @@ class CheapElement extends CheapNode {
     }
 
     // Inner HTML
-    let html = this.getInnerHtml(options, depth+1);
+    let html = await this.getInnerHtml(options, depth+1);
 
     // Closed if empty
     if(!html) {
@@ -407,7 +409,7 @@ class CheapElement extends CheapNode {
     return ss.join("")
   }
   //---------------------------------------------------
-  getInnerHtml(options, depth=0) {
+  async getInnerHtml(options, depth=0) {
     // prepare to html render list
     let html = []
     if(this.hasChildren()){
@@ -418,7 +420,7 @@ class CheapElement extends CheapNode {
         }
         // Element node
         else if(nd.isElementNode()){
-          let ndHtml = nd.getOutterHtml(options, depth)
+          let ndHtml = await nd.getOutterHtml(options, depth)
           html.push(ndHtml)
         }
       }
@@ -654,7 +656,7 @@ class CheapAnchorElement extends CheapElement {
     super("A", "inline", {}, parentNode)
   }
   //---------------------------------------------------
-  getMarkdown(){
+  async getMarkdown(){
     let ref  = this.getAttr("refer")
     let href = this.getAttr("href")
     let text = this.getText()
@@ -671,13 +673,14 @@ class CheapAnchorElement extends CheapElement {
     return `[${text}](${href})`
   }
   //---------------------------------------------------
-  joinDelta(delta=[], config){
+  async joinDelta(delta=[], config){
     let lastOp = super.joinDelta(delta, {autoJoinPrev:false});
-    _.set(lastOp, "attributes.link", this.getRuntimeAttrs(config).href)
+    let attrs = await this.getRuntimeAttrs(config)
+    _.set(lastOp, "attributes.link", attrs.href)
     return lastOp
   }
   //---------------------------------------------------
-  getRuntimeAttrs({anchorHref=_.identity}={}) {
+  async getRuntimeAttrs({anchorHref=_.identity}={}) {
     let attrs = _.assign({}, this.attrs)
     // Explain refers
     if(attrs.refer) {
@@ -686,7 +689,7 @@ class CheapAnchorElement extends CheapElement {
     }
     // Eval to real href
     if(attrs.href) {
-      attrs.href = anchorHref(attrs.href)
+      attrs.href = await anchorHref(attrs.href)
     }
     // Done
     return attrs
@@ -700,8 +703,13 @@ class CheapMediaElement extends CheapElement {
     super(tagName, display, setup, parentNode)
   }
   //---------------------------------------------------
-  getMarkdown(){
+  async getMarkdown({mediaSrc}){
     let src  = this.getAttr("src")
+    // Transfer src
+    if(_.isFunction(mediaSrc)) {
+      src = await mediaSrc(src)
+    }
+    // Sizing
     let size = _.without([
       this.getAttr("width",null),
       this.getAttr("height",null)
@@ -710,11 +718,12 @@ class CheapMediaElement extends CheapElement {
       size.join("-"), this.getAttr("alt", "")
     ], "")
 
+    // To markdown mark
     return `![${alts.join(":")}](${src})`
   }
   //---------------------------------------------------
-  joinDelta(delta=[], config){
-    let attrs = this.getRuntimeAttrs(config)
+  async joinDelta(delta=[], config){
+    let attrs = await this.getRuntimeAttrs(config)
     let src = attrs.src
     let attributes = _.omit(attrs, "src")
     let key = this.isTag("IMG") ? "image" : "video"
@@ -725,11 +734,11 @@ class CheapMediaElement extends CheapElement {
     delta.push(op)
   }
   //---------------------------------------------------
-  getRuntimeAttrs({mediaSrc=_.identity}={}) {
+  async getRuntimeAttrs({mediaSrc}={}) {
     let attrs = _.assign({}, this.attrs)
     // Eval to real src
-    if(attrs.src) {
-      attrs.src = mediaSrc(attrs.src)
+    if(attrs.src && _.isFunction(mediaSrc)) {
+      attrs.src = await mediaSrc(attrs.src)
     }
     // Done
     return attrs
@@ -801,8 +810,8 @@ class CheapBlockElement extends CheapElement {
     super(tagName, "block", setup, parentNode)
   }
   //---------------------------------------------------
-  getMarkdown(config) {
-    let md = super.getMarkdown(config)
+  async getMarkdown(config) {
+    let md = await super.getMarkdown(config)
     return md + "\n"
   }
   //---------------------------------------------------
@@ -814,12 +823,12 @@ class CheapListElement extends CheapBlockElement {
     super(tagName, {}, parentNode)
   }
   //---------------------------------------------------
-  joinDelta(delta=[], config){
+  async joinDelta(delta=[], config){
     if(this.hasChildren()) {
       let listType = this.isTag("OL") ? "ordered" : "bullet"
       let lastOp;
       for(let $li of this.children) {
-        $li.joinDelta(delta, config)
+        await $li.joinDelta(delta, config)
         lastOp = _.last(delta)
         if(lastOp.insert.endsWith("\n")){
           lastOp.insert += "\n"
@@ -858,7 +867,7 @@ class CheapListItemElement extends CheapElement {
     super("LI", "block", {},  parentNode)
   }
   //---------------------------------------------------
-  getMarkdown(config) {
+  async getMarkdown(config) {
     let {
       ulIndent  = 2,
       olIndent  = 3,
@@ -895,7 +904,7 @@ class CheapListItemElement extends CheapElement {
 
       mds.push(`${ix}. `)
     }
-    mds.push(super.getMarkdown(config))
+    mds.push(await super.getMarkdown(config))
     mds.push("\n")
     return mds.join("")
   }
@@ -1008,15 +1017,15 @@ class CheapBlockQuoteElement extends CheapBlockElement {
     super("BLOCKQUOTE", {},  parentNode)
   }
   //---------------------------------------------------
-  getMarkdown(config) {
+  async getMarkdown(config) {
     let mds = ["> "]
-    mds.push(super.getMarkdown(config))
+    mds.push(await super.getMarkdown(config))
     mds.push("\n")
     return mds.join("")
   }
   //---------------------------------------------------
-  joinDelta(delta=[], config){
-    super.joinDelta(delta, config)
+  async joinDelta(delta=[], config){
+    await super.joinDelta(delta, config)
     let lastOp = {insert:"\n", attributes:{blockquote: true}}
     delta.push(lastOp)
     return _.last(delta)
@@ -1030,16 +1039,16 @@ class CheapSectionHeadingElement extends CheapBlockElement {
     super(`H${level}`, {attrs:{level}},  parentNode)
   }
   //---------------------------------------------------
-  getMarkdown(config) {
+  async getMarkdown(config) {
     let mds = [_.repeat('#', this.getAttr("level", 1))]
     mds.push(" ")
-    mds.push(super.getMarkdown(config))
+    mds.push(await super.getMarkdown(config))
     mds.push("\n")
     return mds.join("")
   }
   //---------------------------------------------------
-  joinDelta(delta=[], config){
-    super.joinDelta(delta, config)
+  async joinDelta(delta=[], config){
+    await super.joinDelta(delta, config)
     let lastOp = {insert:"\n", attributes:{header: this.getAttr("level", 1)}}
     delta.push(lastOp)
     return _.last(delta)
@@ -1053,13 +1062,13 @@ class CheapParagraphElement extends CheapBlockElement {
     super("P", "block", {},  parentNode)
   }
   //---------------------------------------------------
-  getMarkdown(config) {
-    let md = super.getMarkdown(config)
+  async getMarkdown(config) {
+    let md = await super.getMarkdown(config)
     return md + "\n"
   }
   //---------------------------------------------------
-  joinDelta(delta=[], config){
-    let lastOp = super.joinDelta(delta, config)
+  async joinDelta(delta=[], config){
+    let lastOp = await super.joinDelta(delta, config)
     if(lastOp && lastOp.insert && _.isString(lastOp.insert) && !lastOp.attributes) {
       if(!lastOp.insert.endsWith("\n"))
         lastOp.insert += "\n"
@@ -1142,12 +1151,12 @@ class CheapDocument {
    * 
    * @return document body innerHTML
    */
-  toBodyInnerHtml({
+  async toBodyInnerHtml({
     mediaSrc   = _.identity,
     anchorHref = _.identity,
     indent     = 2
   }={}) {
-    return this.$body.getInnerHtml({
+    return await this.$body.getInnerHtml({
       mediaSrc, anchorHref, indent
     })
   }
@@ -1169,7 +1178,8 @@ class CheapDocument {
     return ss.join("\n")
   }
   //---------------------------------------------------
-  toMarkdown({
+  async toMarkdown({
+    mediaSrc,
     ulIndent  = 2,
     olIndent  = 3,
   }={}) {
@@ -1190,8 +1200,14 @@ class CheapDocument {
       md.push('---')
       md.push('\n\n')
     }
+    
     // Body
-    md.push(this.$body.getMarkdown({ulIndent, olIndent}))
+    let mdBody = await this.$body.getMarkdown({
+      mediaSrc,
+      ulIndent, 
+      olIndent
+    })
+    md.push(mdBody)
 
     // Refer links
     if(!_.isEmpty(this.$refs)) {
@@ -1204,9 +1220,9 @@ class CheapDocument {
     return md.join("\n")
   }
   //---------------------------------------------------
-  toDelta(config) {
+  async toDelta(config) {
     let delta = []
-    this.$body.joinDelta(delta, config)
+    await this.$body.joinDelta(delta, config)
     return delta
   }
   //---------------------------------------------------
